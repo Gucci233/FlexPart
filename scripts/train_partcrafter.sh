@@ -11,7 +11,7 @@ accelerate launch \
     --num_machines $NUM_MACHINES \
     --num_processes $(( $NUM_MACHINES * $NUM_LOCAL_GPUS )) \
     --machine_rank $MACHINE_RANK \
-    src/train_partcrafter.py \
+    src/train_flexpart.py \
         --config configs/mp8_nt512.yaml \
         --use_ema \
         --gradient_accumulation_steps 4 \
