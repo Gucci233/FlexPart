@@ -25,6 +25,7 @@ class DiagonalGaussianDistribution(object):
             )
 
     def sample(self, generator: Optional[torch.Generator] = None) -> torch.Tensor:
+        # make sure sample is on the same device as the parameters and has same dtype
         sample = randn_tensor(
             self.mean.shape,
             generator=generator,

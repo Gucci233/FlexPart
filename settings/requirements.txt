@@ -1,5 +1,8 @@
 scikit-learn
 gpustat
+accelerate
+safetensors
+pandas
 nvitop
 diffusers
 transformers==4.56.2
@@ -20,7 +23,6 @@ deepspeed
 wandb[media]
 colormaps
 kiui
-scikit-image
 scipy
 gradio_image_prompter
 gradio

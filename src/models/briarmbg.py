@@ -25,6 +25,7 @@ class REBNCONV(nn.Module):
 
         return xout
 
+## upsample tensor 'src' to have the same spatial size with tensor 'tar'
 def _upsample_like(src,tar):
 
     src = F.interpolate(src,size=tar.shape[2:],mode='bilinear')
@@ -32,6 +33,7 @@ def _upsample_like(src,tar):
     return src
 
 
+### RSU-7 ###
 class RSU7(nn.Module):
 
     def __init__(self, in_ch=3, mid_ch=12, out_ch=3, img_size=512):
@@ -114,6 +116,7 @@ class RSU7(nn.Module):
         return hx1d + hxin
 
 
+### RSU-6 ###
 class RSU6(nn.Module):
 
     def __init__(self, in_ch=3, mid_ch=12, out_ch=3):
@@ -182,6 +185,7 @@ class RSU6(nn.Module):
 
         return hx1d + hxin
 
+### RSU-5 ###
 class RSU5(nn.Module):
 
     def __init__(self, in_ch=3, mid_ch=12, out_ch=3):
@@ -239,6 +243,7 @@ class RSU5(nn.Module):
 
         return hx1d + hxin
 
+### RSU-4 ###
 class RSU4(nn.Module):
 
     def __init__(self, in_ch=3, mid_ch=12, out_ch=3):
@@ -286,6 +291,7 @@ class RSU4(nn.Module):
 
         return hx1d + hxin
 
+### RSU-4F ###
 class RSU4F(nn.Module):
 
     def __init__(self, in_ch=3, mid_ch=12, out_ch=3):
@@ -372,6 +378,7 @@ class BriaRMBG(nn.Module, PyTorchModelHubMixin):
 
         self.stage6 = RSU4F(512,256,512)
 
+        # decoder
         self.stage5d = RSU4F(1024,256,512)
         self.stage4d = RSU4(1024,128,256)
         self.stage3d = RSU5(512,64,128)
@@ -385,31 +392,40 @@ class BriaRMBG(nn.Module, PyTorchModelHubMixin):
         self.side5 = nn.Conv2d(512,out_ch,3,padding=1)
         self.side6 = nn.Conv2d(512,out_ch,3,padding=1)
 
+        # self.outconv = nn.Conv2d(6*out_ch,out_ch,1)
 
     def forward(self,x):
 
         hx = x
 
         hxin = self.conv_in(hx)
+        #hx = self.pool_in(hxin)
 
+        #stage 1
         hx1 = self.stage1(hxin)
         hx = self.pool12(hx1)
 
+        #stage 2
         hx2 = self.stage2(hx)
         hx = self.pool23(hx2)
 
+        #stage 3
         hx3 = self.stage3(hx)
         hx = self.pool34(hx3)
 
+        #stage 4
         hx4 = self.stage4(hx)
         hx = self.pool45(hx4)
 
+        #stage 5
         hx5 = self.stage5(hx)
         hx = self.pool56(hx5)
 
+        #stage 6
         hx6 = self.stage6(hx)
         hx6up = _upsample_like(hx6,hx5)
 
+        #-------------------- decoder --------------------
         hx5d = self.stage5d(torch.cat((hx6up,hx5),1))
         hx5dup = _upsample_like(hx5d,hx4)
 
@@ -425,6 +441,7 @@ class BriaRMBG(nn.Module, PyTorchModelHubMixin):
         hx1d = self.stage1d(torch.cat((hx2dup,hx1),1))
 
 
+        #side output
         d1 = self.side1(hx1d)
         d1 = _upsample_like(d1,x)
 

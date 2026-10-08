@@ -3,7 +3,8 @@ warnings.filterwarnings("ignore")  # ignore all warnings
 import diffusers.utils.logging as diffusion_logging
 diffusion_logging.set_verbosity_error()  # ignore diffusers warnings
 import sys
-sys.path.append("/path/to/your/FlexPart")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
 from src.utils.typing_utils import *
 
 import os
@@ -45,16 +46,17 @@ from src.models.autoencoders import TripoSGVAEModel
 
 from src.models.transformers.flexpart_transformer import FlexPartDiTModel
 
+# from src.models.transformers import PartCrafterDiTModel
 
 from src.datasets import (
-    ObjaversePartDataset, 
-    BatchedObjaversePartDataset, 
-    MultiEpochsDataLoader, 
+    ObjaversePartDataset,
+    BatchedObjaversePartDataset,
+    MultiEpochsDataLoader,
     yield_forever
 )
 from src.utils.data_utils import get_colored_mesh_composition
 from src.utils.train_utils import (
-    MyEMAModel, 
+    MyEMAModel,
     get_configs,
     get_optimizer,
     get_lr_scheduler,
@@ -62,8 +64,8 @@ from src.utils.train_utils import (
     save_model_architecture,
 )
 from src.utils.render_utils import (
-    render_views_around_mesh, 
-    render_normal_views_around_mesh, 
+    render_views_around_mesh,
+    render_normal_views_around_mesh,
     make_grid_for_images_or_videos,
     export_renderings
 )
@@ -211,16 +213,21 @@ def main():
         help="Iteration of the pretrained PartCrafterDiTModel checkpoint"
     )
 
+    # Parse the arguments
     args, extras = parser.parse_known_args()
+    # Parse the config file
     configs = get_configs(args.config, extras)  # change yaml configs by `extras`
 
     args.val_guidance_scales = [float(x[0]) if isinstance(x, list) else float(x) for x in args.val_guidance_scales]
-    if args.max_val_steps > 0: 
+    if args.max_val_steps > 0:
+        # If enable validation, the max_val_steps must be a multiple of nrow
+        # Always keep validation batchsize 1
         divider = configs["val"]["nrow"]
         args.max_val_steps = max(args.max_val_steps, divider)
         if args.max_val_steps % divider != 0:
             args.max_val_steps = (args.max_val_steps // divider + 1) * divider
 
+    # Create an experiment directory using the `tag`
     if args.tag is None:
         args.tag = time.strftime("%Y%m%d_%H_%M_%S")
     exp_dir = os.path.join(args.output_dir, args.tag)
@@ -229,6 +236,7 @@ def main():
     os.makedirs(ckpt_dir, exist_ok=True)
     os.makedirs(eval_dir, exist_ok=True)
 
+    # Initialize the logger
     logging.basicConfig(
         format="%(asctime)s - %(message)s",
         datefmt="%Y/%m/%d %H:%M:%S",
@@ -243,16 +251,19 @@ def main():
     logger.logger.addHandler(file_handler)
     logger.logger.propagate = True  # propagate to the root logger (console)
 
+    # Set DeepSpeed config
     if args.use_deepspeed:
         deepspeed_plugin = DeepSpeedPlugin(
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             gradient_clipping=args.max_grad_norm,
             zero_stage=int(args.zero_stage),
+            # offload_optimizer_device="cpu",  # hard-coded here, TODO: make it configurable
         )
     else:
         deepspeed_plugin = None
 
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    # Initialize the accelerator
     accelerator = Accelerator(
         project_dir=exp_dir,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -264,10 +275,12 @@ def main():
     )
     logger.info(f"Accelerator state:\n{accelerator.state}\n")
 
+    # Set the random seed
     if args.seed >= 0:
         accelerate.utils.set_seed(args.seed)
         logger.info(f"You have chosen to seed([{args.seed}]) the experiment [{args.tag}]\n")
 
+    # Enable TF32 for faster training on Ampere GPUs
     if args.allow_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -308,13 +321,15 @@ def main():
 
     logger.info(f"Loaded [{len(train_dataset)}] training samples and [{len(val_dataset)}] validation samples\n")
 
+    # Compute the effective batch size and scale learning rate
     total_batch_size = configs["train"]["batch_size_per_gpu"] * \
         accelerator.num_processes * args.gradient_accumulation_steps
     configs["train"]["total_batch_size"] = total_batch_size
     if args.scale_lr:
         configs["optimizer"]["lr"] *= (total_batch_size / 256)
         configs["lr_scheduler"]["max_lr"] = configs["optimizer"]["lr"]
-    
+
+    # Initialize the model
     logger.info("Initializing the model...")
     vae = TripoSGVAEModel.from_pretrained(
         configs["model"]["pretrained_model_name_or_path"],
@@ -347,7 +362,7 @@ def main():
             os.path.join(
                 configs["model"]["pretrained_model_name_or_path"],
                 "transformer"
-            ), 
+            ),
             enable_part_embedding=enable_part_embedding,
             enable_point_prompt=enable_point_prompt,
             enable_box_prompt=enable_box_prompt,
@@ -356,6 +371,7 @@ def main():
             enable_global_cross_attn=enable_global_cross_attn,
             global_attn_block_ids=global_attn_block_ids,
             global_attn_block_id_range=global_attn_block_id_range,
+            add_module=False,
         )
         transformer.add_modules()
     elif args.load_pretrained_model is None:
@@ -363,8 +379,8 @@ def main():
         transformer, loading_info = FlexPartDiTModel.from_pretrained(
             configs["model"]["pretrained_model_name_or_path"],
             subfolder="transformer",
-            low_cpu_mem_usage=False, 
-            output_loading_info=True, 
+            low_cpu_mem_usage=False,
+            output_loading_info=True,
             enable_part_embedding=enable_part_embedding,
             enable_point_prompt=enable_point_prompt,
             enable_box_prompt=enable_box_prompt,
@@ -380,15 +396,15 @@ def main():
         logger.info(f"Load FlexPartDiTModel checkpoint from [{args.load_pretrained_model}] iteration [{args.load_pretrained_model_ckpt:06d}]\n")
         path = os.path.join(
             args.output_dir,
-            args.load_pretrained_model, 
-            "checkpoints", 
+            args.load_pretrained_model,
+            "checkpoints",
             f"{args.load_pretrained_model_ckpt:06d}"
         )
         transformer, loading_info = FlexPartDiTModel.from_pretrained(
-            path, 
+            path,
             subfolder="transformer",
-            low_cpu_mem_usage=False, 
-            output_loading_info=True, 
+            low_cpu_mem_usage=False,
+            output_loading_info=True,
             enable_part_embedding=enable_part_embedding,
             enable_point_prompt=enable_point_prompt,
             enable_box_prompt=enable_box_prompt,
@@ -415,9 +431,11 @@ def main():
         ema_transformer = MyEMAModel(
             transformer.parameters(),
             model_cls=FlexPartDiTModel,
+            # model_config=transformer.config,
             **configs["train"]["ema_kwargs"]
         )
 
+    # Freeze VAE and image encoder
     vae.requires_grad_(False)
     image_encoder_dinov2.requires_grad_(False)
     vae.eval()
@@ -437,8 +455,11 @@ def main():
                     trainable_module_names.append(name)
         logger.info(f"Trainable parameter names: {trainable_module_names}\n")
 
+    # transformer.enable_xformers_memory_efficient_attention()  # use `tF.scaled_dot_product_attention` instead
 
+    # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
+        # Create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
         def save_model_hook(models, weights, output_dir):
             if accelerator.is_main_process:
                 if args.use_ema:
@@ -450,6 +471,7 @@ def main():
                 for i, model in enumerate(models):
                     model.save_pretrained(os.path.join(output_dir, "transformer"))
 
+                    # Make sure to pop weight so that corresponding model is not saved again
                     if weights:
                         weights.pop()
 
@@ -461,8 +483,10 @@ def main():
                 del load_model
 
             for _ in range(len(models)):
+                # Pop models so that they are not loaded again
                 model = models.pop()
 
+                # Load diffusers style into model
                 load_model = FlexPartDiTModel.from_pretrained(input_dir, subfolder="transformer")
                 model.register_to_config(**load_model.config)
 
@@ -475,6 +499,7 @@ def main():
     if configs["train"]["grad_checkpoint"]:
         transformer.enable_gradient_checkpointing()
 
+    # Initialize the optimizer and learning rate scheduler
     logger.info("Initializing the optimizer and learning rate scheduler...\n")
     name_lr_mult = configs["train"].get("name_lr_mult", None)
     lr_mult = configs["train"].get("lr_mult", 1.0)
@@ -509,9 +534,11 @@ def main():
     if "num_warmup_steps" in configs["lr_scheduler"]:
         configs["lr_scheduler"]["num_warmup_steps"] //= accelerator.num_processes  # reset for multi-gpu
 
+    # Prepare everything with `accelerator`
     transformer, optimizer, lr_scheduler, train_loader, val_loader, random_val_loader = accelerator.prepare(
         transformer, optimizer, lr_scheduler, train_loader, val_loader, random_val_loader
     )
+    # Set classes explicitly for everything
     transformer: DistributedDataParallel
     optimizer: AcceleratedOptimizer
     lr_scheduler: AcceleratedScheduler
@@ -522,15 +549,19 @@ def main():
     if args.use_ema:
         ema_transformer.to(accelerator.device)
 
+    # For mixed precision training we cast all non-trainable weigths to half-precision
+    # as these weights are only used for inference, keeping weights in full precision is not required.
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
+    # Move `vae` and `image_encoder_dinov2` to gpu and cast to `weight_dtype`
     vae.to(accelerator.device, dtype=weight_dtype)
     image_encoder_dinov2.to(accelerator.device, dtype=weight_dtype)
 
+    # Training configs after distribution and accumulation setup
     updated_steps_per_epoch = math.ceil(len(train_loader) / args.gradient_accumulation_steps)
     total_updated_steps = configs["lr_scheduler"]["total_steps"]
     if args.max_train_steps is None:
@@ -547,14 +578,16 @@ def main():
     logger.info(f"Steps for updating per epoch: [{updated_steps_per_epoch}]")
     logger.info(f"Steps for validation: [{len(val_loader)}]\n")
 
+    # (Optional) Load checkpoint
     global_update_step = 0
     if args.resume_from_iter is not None:
         if args.resume_from_iter < 0:
             args.resume_from_iter = int(sorted(os.listdir(ckpt_dir))[-1])
         logger.info(f"Load checkpoint from iteration [{args.resume_from_iter}]\n")
+        # Load everything
         if version.parse(torch.__version__) >= version.parse("2.4.0"):
             torch.serialization.add_safe_globals([
-                int, list, dict, 
+                int, list, dict,
                 defaultdict,
                 Any,
                 DictConfig, ListConfig, Metadata, ContainerMetadata, AnyNode
@@ -562,10 +595,12 @@ def main():
         accelerator.load_state(os.path.join(ckpt_dir, f"{args.resume_from_iter:06d}"))  # torch < 2.4.0 here for `weights_only=False`
         global_update_step = int(args.resume_from_iter)
 
+    # Save all experimental parameters and model architecture of this run to a file (args and configs)
     if accelerator.is_main_process:
         exp_params = save_experiment_params(args, configs, exp_dir)
         save_model_architecture(accelerator.unwrap_model(transformer), exp_dir)
 
+    # WandB logger
     if accelerator.is_main_process:
         if args.offline_wandb:
             os.environ["WANDB_MODE"] = "offline"
@@ -574,6 +609,7 @@ def main():
             config=exp_params, dir=exp_dir,
             resume=True
         )
+        # Wandb artifact for logging experiment information
         arti_exp_info = wandb.Artifact(args.tag, type="exp_info")
         arti_exp_info.add_file(os.path.join(exp_dir, "params.yaml"))
         arti_exp_info.add_file(os.path.join(exp_dir, "model.txt"))
@@ -591,8 +627,9 @@ def main():
         while len(sigma.shape) < n_dim:
             sigma = sigma.unsqueeze(-1)
         return sigma
-    
-    
+
+
+    # Start training
     if accelerator.is_main_process:
         print()
     logger.info(f"Start training into {exp_dir}\n")
@@ -617,7 +654,7 @@ def main():
         transformer.train()
         transformer.training=True
         with accelerator.accumulate(transformer):
-            
+
             images = batch["images"] # [N, H, W, 3]
             with torch.no_grad():
                 images = feature_extractor_dinov2(
@@ -646,11 +683,12 @@ def main():
 
             with torch.no_grad():
                 latents = vae.encode(
-                    part_surfaces, 
+                    part_surfaces,
                     **configs["model"]["vae"]
                 ).latent_dist.sample()
 
             noise = torch.randn_like(latents)
+            # For weighting schemes where we sample timesteps non-uniformly
             u = compute_density_for_timestep_sampling(
                 weighting_scheme=configs["train"]["weighting_scheme"],
                 batch_size=num_objects,
@@ -660,12 +698,14 @@ def main():
             )
             indices = (u * noise_scheduler.config.num_train_timesteps).long()
             timesteps = noise_scheduler.timesteps[indices].to(accelerator.device) # [M, ]
+            # Repeat the timesteps for each part
             timesteps = timesteps.repeat_interleave(num_parts) # [N, ]
 
             sigmas = get_sigmas(timesteps, len(latents.shape), weight_dtype)
             latent_model_input = noisy_latents = (1. - sigmas) * latents + sigmas * noise
 
             if configs["train"]["cfg_dropout_prob"] > 0:
+                # We use the same dropout mask for the same part
                 dropout_mask = torch.rand(num_objects, device=accelerator.device) < configs["train"]["cfg_dropout_prob"] # [M, ]
                 dropout_mask = dropout_mask.repeat_interleave(num_parts) # [N, ]
                 if dropout_mask.any():
@@ -674,7 +714,7 @@ def main():
             output = transformer(
                 hidden_states=latent_model_input,
                 timestep=timesteps,
-                encoder_hidden_states=image_embeds, 
+                encoder_hidden_states=image_embeds,
                 attention_kwargs={"num_parts": num_parts},
                 point_prompt_xy = point_prompts,
                 box_prompt_xyxy = box_prompts,
@@ -693,18 +733,27 @@ def main():
             elif configs["train"]["training_objective"] == 'v':  # flow matching
                 target = noise - latents
             elif configs["train"]["training_objective"] == '-v':  # reverse flow matching
+                # The training objective for TripoSG is the reverse of the flow matching objective.
+                # It uses "different directions", i.e., the negative velocity.
+                # This is probably a mistake in engineering, not very harmful.
+                # In TripoSG's rectified flow scheduler, prev_sample = sample + (sigma - sigma_next) * model_output
+                # See TripoSG's scheduler https://github.com/VAST-AI-Research/TripoSG/blob/main/triposg/schedulers/scheduling_rectified_flow.py#L296
+                # While in diffusers's flow matching scheduler, prev_sample = sample + (sigma_next - sigma) * model_output
+                # See https://github.com/huggingface/diffusers/blob/main/src/diffusers/schedulers/scheduling_flow_match_euler_discrete.py#L454
                 target = latents - noise
             else:
                 raise ValueError(f"Unknown training objective [{configs['train']['training_objective']}]")
 
+            # For these weighting schemes use a uniform timestep sampling, so post-weight the loss
             weighting = compute_loss_weighting_for_sd3(
                 configs["train"]["weighting_scheme"],
                 sigmas
             )
-           
+
             loss = weighting * tF.mse_loss(model_pred.float(), target.float(), reduction="none")
             loss = loss.mean(dim=list(range(1, len(loss.shape))))
             loss = loss.mean()+aux_loss
+            # Backpropagate
             accelerator.backward(loss)
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(transformer.parameters(), args.max_grad_norm)
@@ -713,7 +762,9 @@ def main():
             lr_scheduler.step()
             optimizer.zero_grad()
         del batch
+        # Checks if the accelerator has performed an optimization step behind the scenes
         if accelerator.sync_gradients:
+            # Gather the losses across all processes for logging (if we use distributed training)
             loss = accelerator.gather(loss.detach()).mean()
 
             logs = {
@@ -735,11 +786,12 @@ def main():
                 f", aux_loss: {logs['aux_loss']:.4f}"
             )
 
+            # Log the training progress
             if (
-                global_update_step % configs["train"]["log_freq"] == 0 
+                global_update_step % configs["train"]["log_freq"] == 0
                 or global_update_step == 1
                 or global_update_step % updated_steps_per_epoch == 0 # last step of an epoch
-            ):  
+            ):
                 if accelerator.is_main_process:
                     wandb.log({
                         "training/loss": logs["loss"],
@@ -751,14 +803,17 @@ def main():
                             "training/ema": logs["ema"]
                         }, step=global_update_step)
 
+            # Save checkpoint
             if (
                 global_update_step % configs["train"]["save_freq"] == 0  # 1. every `save_freq` steps
                 or global_update_step % (configs["train"]["save_freq_epoch"] * updated_steps_per_epoch) == 0  # 2. every `save_freq_epoch` epochs
                 or global_update_step == total_updated_steps # 3. last step of an epoch
-            ): 
+                # or global_update_step == 1 # 4. first step
+            ):
 
                 gc.collect()
                 if accelerator.distributed_type == accelerate.utils.DistributedType.DEEPSPEED:
+                    # DeepSpeed requires saving weights on every device; saving weights only on the main process would cause issues
                     accelerator.save_state(os.path.join(ckpt_dir, f"{global_update_step:06d}"))
                 elif accelerator.is_main_process:
                     accelerator.save_state(os.path.join(ckpt_dir, f"{global_update_step:06d}"))

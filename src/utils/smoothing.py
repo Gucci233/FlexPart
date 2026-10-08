@@ -1,9 +1,32 @@
+# -*- coding: utf-8 -*-
 
+# Copyright (c) 2012-2015, P. M. Neila
+# All rights reserved.
 
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
 
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
 
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
 
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from
+#   this software without specific prior written permission.
 
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 Utilities for smoothing the occ/sdf grids.
@@ -45,6 +68,7 @@ def _buildq3d(variable_indices: np.ndarray):
     num_variables = variable_indices.max() + 1
     filterq = sparse.lil_matrix((3 * num_variables, num_variables))
 
+    # Pad variable_indices to simplify out-of-bounds accesses
     variable_indices = np.pad(
         variable_indices, [(0, 1), (0, 1), (0, 1)], mode="constant", constant_values=-1
     )
@@ -104,6 +128,7 @@ def _buildq3d_gpu(variable_indices: torch.Tensor, chunk_size=10000):
     device = variable_indices.device
     num_variables = variable_indices.max().item() + 1
 
+    # Pad variable_indices to simplify out-of-bounds accesses
     variable_indices = torch.nn.functional.pad(
         variable_indices, (0, 1, 0, 1, 0, 1), mode="constant", value=-1
     )
@@ -111,6 +136,7 @@ def _buildq3d_gpu(variable_indices: torch.Tensor, chunk_size=10000):
     coords = torch.nonzero(variable_indices >= 0)
     i, j, k = coords[:, 0], coords[:, 1], coords[:, 2]
 
+    # Function to process a chunk of data
     def process_chunk(start, end):
         row_indices = []
         col_indices = []
@@ -144,6 +170,7 @@ def _buildq3d_gpu(variable_indices: torch.Tensor, chunk_size=10000):
                 col_indices.append(neighbor[mask])
                 values.append(torch.ones(mask.sum(), device=device))
 
+                # Add 1 to the diagonal for out-of-bounds neighbors
                 row_indices.append(
                     3 * torch.arange(start, end, device=device)[~mask] + axis
                 )
@@ -154,6 +181,7 @@ def _buildq3d_gpu(variable_indices: torch.Tensor, chunk_size=10000):
 
         return torch.cat(row_indices), torch.cat(col_indices), torch.cat(values)
 
+    # Process data in chunks
     all_row_indices = []
     all_col_indices = []
     all_values = []
@@ -165,18 +193,24 @@ def _buildq3d_gpu(variable_indices: torch.Tensor, chunk_size=10000):
         all_col_indices.append(col_indices)
         all_values.append(values)
 
+    # Concatenate all chunks
     row_indices = torch.cat(all_row_indices)
     col_indices = torch.cat(all_col_indices)
     values = torch.cat(all_values)
 
+    # Create sparse tensor
     indices = torch.stack([row_indices, col_indices])
     filterq = torch.sparse_coo_tensor(
         indices, values, (3 * num_variables, num_variables)
     )
 
+    # Compute filterq.T @ filterq
     return torch.sparse.mm(filterq.t(), filterq)
 
 
+# Usage example:
+# variable_indices = torch.tensor(...).cuda()  # Your input tensor on GPU
+# result = _buildq3d_gpu(variable_indices)
 
 
 def _buildq2d(variable_indices: np.ndarray):
@@ -189,6 +223,7 @@ def _buildq2d(variable_indices: np.ndarray):
     num_variables = variable_indices.max() + 1
     filterq = sparse.lil_matrix((3 * num_variables, num_variables))
 
+    # Pad variable_indices to simplify out-of-bounds accesses
     variable_indices = np.pad(
         variable_indices, [(0, 1), (0, 1)], mode="constant", constant_values=-1
     )
@@ -246,6 +281,7 @@ def _jacobi(
 
     x = x0
 
+    # We check the stopping criterion each 10 iterations
     check_each = 10
     cum_rel_tol = 1 - (1 - rel_tol) ** check_each
 
@@ -256,15 +292,19 @@ def _jacobi(
         x_1 = -jacobi_d * jacobi_r.dot(x)
         x = weight * x_1 + (1 - weight) * x
 
+        # Constraints.
         x = np.maximum(x, lower_bound)
         x = np.minimum(x, upper_bound)
 
+        # Stopping criterion
         if (i + 1) % check_each == 0:
+            # Update energy
             energy_before = energy_now
             energy_now = np.dot(x, filterq.dot(x)) / 2
 
             logging.info("Energy at iter %d: %.6g", i + 1, energy_now)
 
+            # Check stopping criterion
             cum_rel_improvement = (energy_before - energy_now) / energy_before
             if cum_rel_improvement < cum_rel_tol:
                 break
@@ -284,6 +324,7 @@ def signed_distance_function(
 
     binary_array = np.where(levelset > 0, True, False)
 
+    # Compute the band and the border.
     dist_func = ndi.distance_transform_edt
     distance = np.where(
         binary_array, dist_func(binary_array) - 0.5, -dist_func(~binary_array) + 0.5
@@ -306,6 +347,7 @@ def signed_distance_function_iso0(
 
     binary_array = levelset > 0
 
+    # Compute the band and the border.
     dist_func = ndi.distance_transform_edt
     distance = np.where(
         binary_array, dist_func(binary_array), -dist_func(~binary_array)
@@ -322,6 +364,7 @@ def signed_distance_function_iso0(
 def signed_distance_function_gpu(levelset: torch.Tensor, band_radius: int):
     binary_array = (levelset > 0).float()
 
+    # Compute distance transform
     dist_pos = (
         F.max_pool3d(
             -binary_array.unsqueeze(0).unsqueeze(0), kernel_size=3, stride=1, padding=1
@@ -336,7 +379,12 @@ def signed_distance_function_gpu(levelset: torch.Tensor, band_radius: int):
 
     distance = torch.where(binary_array > 0, dist_pos - 0.5, -dist_neg + 0.5)
 
+    # breakpoint()
 
+    # Use levelset as distance directly
+    # distance = levelset
+    # print(distance.shape)
+    # Compute border and band
     border = torch.abs(distance) < 1
     band = torch.abs(distance) <= band_radius
 
@@ -356,7 +404,9 @@ def smooth_constrained(
     Victor Lempitsky, CVPR10
     """
 
+    # # Compute the distance map, the border and the band.
     logging.info("Computing distance transform...")
+    # distance, _, band = signed_distance_function(binary_array, band_radius)
     binary_array_gpu = torch.from_numpy(binary_array).cuda()
     distance, _, band = signed_distance_function_gpu(binary_array_gpu, band_radius)
     distance = distance.cpu().numpy()
@@ -364,14 +414,19 @@ def smooth_constrained(
 
     variable_indices = _build_variable_indices(band)
 
+    # Compute filterq.
     logging.info("Building matrix filterq...")
     if binary_array.ndim == 3:
         filterq = _buildq3d(variable_indices)
+        # variable_indices_gpu = torch.from_numpy(variable_indices).cuda()
+        # filterq_gpu = _buildq3d_gpu(variable_indices_gpu)
+        # filterq = filterq_gpu.cpu().numpy()
     elif binary_array.ndim == 2:
         filterq = _buildq2d(variable_indices)
     else:
         raise ValueError("binary_array.ndim not in [2, 3]")
 
+    # Initialize the variables.
     res = np.asarray(distance, dtype=np.double)
     x = res[band]
     upper_bound = np.where(x < 0, x, np.inf)
@@ -380,6 +435,7 @@ def smooth_constrained(
     upper_bound[np.abs(upper_bound) < 1] = 0
     lower_bound[np.abs(lower_bound) < 1] = 0
 
+    # Solve.
     logging.info("Minimizing energy...")
     x = _jacobi(
         filterq=filterq,
@@ -416,6 +472,7 @@ def smooth_constrained_gpu(
 ):
     distance, _, band = signed_distance_function_gpu(binary_array, band_radius)
 
+    # Initialize variables
     x = distance[band]
     upper_bound = torch.where(x < 0, x, torch.tensor(float("inf"), device=x.device))
     lower_bound = torch.where(x > 0, x, torch.tensor(float("-inf"), device=x.device))
@@ -423,6 +480,7 @@ def smooth_constrained_gpu(
     upper_bound[torch.abs(upper_bound) < 1] = 0
     lower_bound[torch.abs(lower_bound) < 1] = 0
 
+    # Define the 3D Laplacian kernel
     laplacian_kernel = torch.tensor(
         [
             [
@@ -440,21 +498,32 @@ def smooth_constrained_gpu(
 
     breakpoint()
 
+    # Simplified Jacobi iteration
     for i in range(max_iters):
+        # Reshape x to 5D tensor (batch, channel, depth, height, width)
         x_5d = x.view(1, 1, *band.shape)
         x_3d = x.view(*band.shape)
 
+        # Apply 3D convolution
         laplacian = F.conv3d(x_5d, laplacian_kernel, padding=1)
 
+        # Reshape back to original dimensions
         laplacian = laplacian.view(x.shape)
 
+        # Use a small relaxation factor to improve stability
         relaxation_factor = 0.1
         tv_weight = 0.1
+        # x_new = x + relaxation_factor * laplacian
         x_new = total_variation_denoising(x_3d, weight=tv_weight)
+        # Print laplacian min and max
+        # print(f"Laplacian min: {laplacian.min().item():.4f}, max: {laplacian.max().item():.4f}")
 
+        # Apply constraints
+        # Reshape x_new to match the dimensions of lower_bound and upper_bound
         x_new = x_new.view(x.shape)
         x_new = torch.clamp(x_new, min=lower_bound, max=upper_bound)
 
+        # Check for convergence
         diff_norm = torch.norm(x_new - x)
         print(diff_norm)
         x_norm = torch.norm(x)
@@ -468,6 +537,7 @@ def smooth_constrained_gpu(
 
         x = x_new
 
+        # Check for NaN and break if found, also check for inf
         if torch.isnan(x).any() or torch.isinf(x).any():
             print(f"NaN or Inf detected at iteration {i}")
             breakpoint()
@@ -484,6 +554,7 @@ def smooth_gaussian(binary_array: np.ndarray, sigma: float = 3) -> np.ndarray:
 
 
 def smooth_gaussian_gpu(binary_array: torch.Tensor, sigma: float = 3):
+    # vol = binary_array.float()
     vol = binary_array
     kernel_size = int(2 * sigma + 1)
     kernel = torch.ones(

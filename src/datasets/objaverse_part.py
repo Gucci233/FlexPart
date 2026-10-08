@@ -20,58 +20,58 @@ def sample_and_normalize_point_from_masks(
     k_samples: int = 10
 ) -> List[Optional[Tuple[float, float]]]:
     """
-    Sample a "random centroid offset" point from mask list and normalize.
+    从掩码列表中采样一个“随机质心偏置”的点，并归一化。
     Args:
-        masks (List[np.ndarray]): 
-            List of (H, W) boolean masks.
-        k_samples (int): 
-            Number of candidate points to randomly sample per mask.
+        masks (List[np.ndarray]):
+            (H, W) 的布尔掩码列表。
+        k_samples (int):
+            为每个掩码随机采样的候选点数量。
 
     Returns:
         List[Optional[Tuple[float, float]]]:
-            List of (x_norm, y_norm) coordinates, None if mask is empty.
+            (x_norm, y_norm) 坐标的列表，如果掩码为空，则为 None。
     """
     sampled_points_normalized = []
     boxes_normalized = []
     if not masks:
         return []
-        
+
     img_height, img_width = masks[0].shape
     float_width = float(img_width)
     float_height = float(img_height)
-    
+
     for (mask,box) in zip(masks,boxes):
         y_indices, x_indices = np.where(mask)
-        
+
         num_positive_pixels = len(y_indices)
-        
+
         if num_positive_pixels > 0:
-            
+
             centroid_y = np.mean(y_indices)
             centroid_x = np.mean(x_indices)
-            
+
             num_to_sample = min(k_samples, num_positive_pixels)
-            
+
             candidate_indices = np.random.choice(
                 num_positive_pixels, size=num_to_sample, replace=False
             )
-            
+
             sampled_y = y_indices[candidate_indices]
             sampled_x = x_indices[candidate_indices]
-            
+
             distances_sq = (sampled_y - centroid_y)**2 + (sampled_x - centroid_x)**2
-            
+
             best_of_k_idx = np.argmin(distances_sq)
-            
-            
+
+
             x_pixel = sampled_x[best_of_k_idx]
             y_pixel = sampled_y[best_of_k_idx]
-            
+
             x_norm = (float(x_pixel) + 0.5) / float_width
             y_norm = (float(y_pixel) + 0.5) / float_height
             x_norm = np.clip(x_norm, 0.0, 1.0)
             y_norm = np.clip(y_norm, 0.0, 1.0)
-            
+
             sampled_points_normalized.append((x_norm, y_norm))
             boxes_x1_norm = (float(box[0]) + 0.5) / float_width
             boxes_y1_norm = (float(box[1]) + 0.5) / float_height
@@ -84,9 +84,9 @@ def sample_and_normalize_point_from_masks(
 
             boxes_normalized.append((boxes_x1_norm,boxes_y1_norm,boxes_x2_norm,boxes_y2_norm))
         else:
-            sampled_points_normalized.append(None) 
+            sampled_points_normalized.append(None)
             boxes_normalized.append(None)
-            
+
     return sampled_points_normalized,boxes_normalized
 
 
@@ -95,7 +95,7 @@ def get_box_validity_with_dropout(
     normalized_boxes: List[Union[np.ndarray, List[float]]]
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     num_parts = len(normalized_boxes)
-    
+
     if num_parts == 0:
         return torch.zeros((0, 4), dtype=torch.float32), torch.zeros((0,), dtype=torch.bool)
 
@@ -105,11 +105,11 @@ def get_box_validity_with_dropout(
 
     if rand_mode < 0.25:
         valid_flags = [False] * num_parts
-        
+
     elif rand_mode < 0.50:
         for _ in range(num_parts):
             valid_flags.append(np.random.rand() >= 0.5)
-            
+
     else:
         valid_flags = [True] * num_parts
 
@@ -122,7 +122,7 @@ def get_mask_validity_with_dropout(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
     num_parts = len(normalized_masks)
-    
+
     if num_parts == 0:
         return torch.zeros((0, 4), dtype=torch.float32), torch.zeros((0,), dtype=torch.bool)
 
@@ -132,11 +132,11 @@ def get_mask_validity_with_dropout(
 
     if rand_mode < 0.5:
         valid_flags = [False] * num_parts
-        
+
     else:
         valid_flags = [True] * num_parts
 
-    valid_tensor = torch.tensor(valid_flags, dtype=torch.bool) 
+    valid_tensor = torch.tensor(valid_flags, dtype=torch.bool)
 
     return valid_tensor
 
@@ -145,10 +145,10 @@ def get_point_validity_with_dropout(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
     num_parts = len(normalized_points)
-    
+
     if num_parts == 1:
         valid_flags = [False]
-        valid_tensor = torch.tensor(valid_flags, dtype=torch.bool) 
+        valid_tensor = torch.tensor(valid_flags, dtype=torch.bool)
         return valid_tensor
 
     valid_flags = []
@@ -157,7 +157,7 @@ def get_point_validity_with_dropout(
 
     if rand_mode < 0.1:
         valid_flags = [False] * num_parts
-            
+
     else:
         valid_flags = [True] * num_parts
 
@@ -167,9 +167,9 @@ def get_point_validity_with_dropout(
 
 class ObjaversePartDataset(torch.utils.data.Dataset):
     def __init__(
-        self, 
-        configs: DictConfig, 
-        training: bool = True, 
+        self,
+        configs: DictConfig,
+        training: bool = True,
     ):
         super().__init__()
         self.configs = configs
@@ -213,10 +213,11 @@ class ObjaversePartDataset(torch.utils.data.Dataset):
 
     def __len__(self) -> int:
         return len(self.data_configs)
-    
+
     def _get_data_by_config(self, data_config):
         surface_path = data_config['surface_path']
         surface_data = np.load(surface_path, allow_pickle=True).item()
+        # If parts is empty, the object is the only part
         part_surfaces = surface_data['parts'] if len(surface_data['parts']) > 0 else [surface_data['object']]
         part_obbs = surface_data['part_obbs']
         temp = list(zip(part_surfaces,part_obbs))
@@ -228,11 +229,12 @@ class ObjaversePartDataset(torch.utils.data.Dataset):
 
         part_masks = [data["2d_mask"] for data in part_surfaces]
         part_boxes = [data["2d_box"] for data in part_surfaces]
+        # prompt_points = torch.stack(part_masks,dim=0)
         prompt_points,prompt_boxes = sample_and_normalize_point_from_masks(part_masks,part_boxes)
         prompt_points = [torch.FloatTensor(point) for point in prompt_points]
         prompt_points = torch.stack(prompt_points,dim=0)
         valid_points = get_point_validity_with_dropout(prompt_points)
-        
+
         valid_boxes = get_box_validity_with_dropout(prompt_boxes)
         prompt_boxes = [torch.FloatTensor(box) for box in prompt_boxes]
         prompt_boxes = torch.stack(prompt_boxes,dim=0)
@@ -267,12 +269,12 @@ class ObjaversePartDataset(torch.utils.data.Dataset):
             "valid_masks":valid_masks,
             "obbs":obbs,
         }
-    
+
     def __getitem__(self, idx: int):
         data_config = self.data_configs[idx]
         data = self._get_data_by_config(data_config)
         return data
-        
+
 class BatchedObjaversePartDataset(ObjaversePartDataset):
     def __init__(
         self,
@@ -289,14 +291,15 @@ class BatchedObjaversePartDataset(ObjaversePartDataset):
         self.is_main_process = is_main_process
         if batch_size < self.max_num_parts:
             self.data_configs = [config for config in self.data_configs if config['num_parts'] <= batch_size]
-        
+
         if shuffle:
             random.shuffle(self.data_configs)
 
         self.object_configs = [config for config in self.data_configs if config['num_parts'] == 1]
         self.parts_configs = [config for config in self.data_configs if config['num_parts'] > 1]
-        
+
         self.object_ratio = configs['dataset']['object_ratio']
+        # Here we keep the ratio of object to parts
         self.object_configs = self.object_configs[:int(len(self.parts_configs) * self.object_ratio)]
 
         dropped_data_configs = self.parts_configs + self.object_configs
@@ -306,7 +309,7 @@ class BatchedObjaversePartDataset(ObjaversePartDataset):
             self.data_configs = self._get_batched_configs(dropped_data_configs, batch_size)
         else:
             self.data_configs = self._get_batched_configs_improve(dropped_data_configs, batch_size)
-    
+
     def _get_batched_configs(self, data_configs, batch_size):
         batched_data_configs = []
         num_data_configs = len(data_configs)
@@ -331,19 +334,25 @@ class BatchedObjaversePartDataset(ObjaversePartDataset):
                     unchosen_configs.append(config) # add back to the end
             data_configs = data_configs + unchosen_configs # concat the unchosen configs
             if temp_num_parts == batch_size:
+                # Successfully get a batch
                 if len(temp_batch) < batch_size:
+                    # pad the batch
                     temp_batch += [{}] * (batch_size - len(temp_batch))
                 batched_data_configs += temp_batch
+                # Else, the code enters here because len(data_configs) == 0
+                # which means in the left data_configs, there are no enough
+                # "suitable" configs to form a batch.
+                # Thus, drop the uncompleted batch.
         progress_bar.close()
         return batched_data_configs
 
     def _get_batched_configs_improve(self, data_configs, batch_size):
         """
-        Use multi-pass "First-Fit Decreasing" algorithm to pack batches.
-        This method significantly reduces data waste.
+        使用多轮"首次适应递减" (Multi-Pass First-Fit Decreasing) 算法来打包批次。
+        这种方法能显著减少数据丢弃。
         """
         final_batched_configs = []
-        
+
         current_configs_to_pack = sorted(data_configs, key=lambda x: x['num_parts'], reverse=True)
 
         progress_bar = tqdm(
@@ -361,7 +370,7 @@ class BatchedObjaversePartDataset(ObjaversePartDataset):
             for config in current_configs_to_pack:
                 num_parts = config['num_parts']
                 if num_parts > batch_size:
-                    progress_bar.update(1) 
+                    progress_bar.update(1)
                     continue
 
                 placed_in_bin = False
@@ -371,23 +380,23 @@ class BatchedObjaversePartDataset(ObjaversePartDataset):
                         bins[i][0].append(config)
                         bins[i][1] += num_parts
                         placed_in_bin = True
-                        break 
-                
+                        break
+
                 if not placed_in_bin:
                     bins.append( [ [config], num_parts ] )
 
             for items_list, current_sum in bins:
                 if current_sum == batch_size:
                     new_full_batches_count += 1
-                    
+
                     progress_bar.update(len(items_list))
-                    
+
                     if len(items_list) < batch_size:
                         items_list += [{}] * (batch_size - len(items_list))
                     final_batched_configs += items_list
                 else:
                     next_pass_configs += items_list
-            
+
             if new_full_batches_count == 0:
                 progress_bar.update(len(next_pass_configs))
                 break
@@ -395,16 +404,16 @@ class BatchedObjaversePartDataset(ObjaversePartDataset):
                 current_configs_to_pack = sorted(next_pass_configs, key=lambda x: x['num_parts'], reverse=True)
 
         progress_bar.close()
-        
+
         return final_batched_configs
-    
+
     def __getitem__(self, idx: int):
         data_config = self.data_configs[idx]
         if len(data_config) == 0:
             return {}
         data = self._get_data_by_config(data_config)
         return data
-    
+
     def collate_fn(self, batch):
         batch = [data for data in batch if len(data) > 0]
         images = torch.cat([data['images'] for data in batch], dim=0) # [N, H, W, 3]
@@ -417,7 +426,7 @@ class BatchedObjaversePartDataset(ObjaversePartDataset):
         valid_boxes = torch.cat([data['valid_boxes'] for data in batch], dim=0) # [N, 1]
         valid_masks = torch.cat([data['valid_masks'] for data in batch], dim=0) # [N, 1]
         obbs = torch.cat([data['obbs'] for data in batch], dim=0) # [N, 2,3]
-    
+
         assert images.shape[0] == surfaces.shape[0] == num_parts.sum() == self.batch_size
         batch = {
             "images": images,

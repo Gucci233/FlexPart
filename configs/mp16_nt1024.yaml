@@ -1,5 +1,5 @@
 model:
-  pretrained_model_name_or_path: '/path/to/your/model/TripoSG/pretrained_weights/TripoSG'
+  pretrained_model_name_or_path: './weight/TripoSG'
   vae:
     num_tokens: 1024
   transformer:
@@ -13,8 +13,8 @@ model:
 
 
 dataset:
-  config: 
-    -  "/path/to/your/model/FlexPart/traning_ann.json" # Modify this path if you use your own dataset
+  config:
+    -  "./data/object_part_configs_new.json" # Modify this path if you use your own dataset
   training_ratio: 0.998
   min_num_parts: 2
   max_num_parts: 16
@@ -57,7 +57,7 @@ train:
     inv_gamma: 1.
     power: 0.75
 
-  
+
 val:
   batch_size_per_gpu: 1
   nrow: 4

@@ -97,6 +97,8 @@ class FlashTripo2AttnProcessor2_0:
             attention_mask = attn.prepare_attention_mask(
                 attention_mask, sequence_length, batch_size
             )
+            # scaled_dot_product_attention expects attention_mask shape to be
+            # (batch, heads, source_length, target_length)
             attention_mask = attention_mask.view(
                 batch_size, attn.heads, -1, attention_mask.shape[-1]
             )
@@ -118,6 +120,8 @@ class FlashTripo2AttnProcessor2_0:
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
 
+        # NOTE that tripo2 split heads first then split qkv or kv, like .view(..., attn.heads, 3, dim)
+        # instead of .view(..., 3, attn.heads, dim). So we need to re-split here.
         if not attn.is_cross_attention:
             qkv = torch.cat((query, key, value), dim=-1)
             split_size = qkv.shape[-1] // attn.heads // 3
@@ -141,19 +145,23 @@ class FlashTripo2AttnProcessor2_0:
         if attn.norm_k is not None:
             key = attn.norm_k(key)
 
+        # Apply RoPE if needed
         if image_rotary_emb is not None:
             query = apply_rotary_emb(query, image_rotary_emb)
             if not attn.is_cross_attention:
                 key = apply_rotary_emb(key, image_rotary_emb)
 
-        hidden_states = self.qkv(attn, query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False)   
+        # flashvdm topk
+        hidden_states = self.qkv(attn, query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False)
 
         hidden_states = hidden_states.transpose(1, 2).reshape(
             batch_size, -1, attn.heads * head_dim
         )
         hidden_states = hidden_states.to(query.dtype)
 
+        # linear proj
         hidden_states = attn.to_out[0](hidden_states)
+        # dropout
         hidden_states = attn.to_out[1](hidden_states)
 
         if input_ndim == 4:
@@ -213,6 +221,8 @@ class TripoSGAttnProcessor2_0:
             attention_mask = attn.prepare_attention_mask(
                 attention_mask, sequence_length, batch_size
             )
+            # scaled_dot_product_attention expects attention_mask shape to be
+            # (batch, heads, source_length, target_length)
             attention_mask = attention_mask.view(
                 batch_size, attn.heads, -1, attention_mask.shape[-1]
             )
@@ -234,6 +244,8 @@ class TripoSGAttnProcessor2_0:
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
 
+        # NOTE that pre-trained models split heads first then split qkv or kv, like .view(..., attn.heads, 3, dim)
+        # instead of .view(..., 3, attn.heads, dim). So we need to re-split here.
         if not attn.is_cross_attention:
             qkv = torch.cat((query, key, value), dim=-1)
             split_size = qkv.shape[-1] // attn.heads // 3
@@ -257,11 +269,14 @@ class TripoSGAttnProcessor2_0:
         if attn.norm_k is not None:
             key = attn.norm_k(key)
 
+        # Apply RoPE if needed
         if image_rotary_emb is not None:
             query = apply_rotary_emb(query, image_rotary_emb)
             if not attn.is_cross_attention:
                 key = apply_rotary_emb(key, image_rotary_emb)
 
+        # the output of sdp = (batch, num_heads, seq_len, head_dim)
+        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
@@ -271,7 +286,9 @@ class TripoSGAttnProcessor2_0:
         )
         hidden_states = hidden_states.to(query.dtype)
 
+        # linear proj
         hidden_states = attn.to_out[0](hidden_states)
+        # dropout
         hidden_states = attn.to_out[1](hidden_states)
 
         if input_ndim == 4:
@@ -333,6 +350,8 @@ class FusedTripoSGAttnProcessor2_0:
             attention_mask = attn.prepare_attention_mask(
                 attention_mask, sequence_length, batch_size
             )
+            # scaled_dot_product_attention expects attention_mask shape to be
+            # (batch, heads, source_length, target_length)
             attention_mask = attention_mask.view(
                 batch_size, attn.heads, -1, attention_mask.shape[-1]
             )
@@ -342,6 +361,7 @@ class FusedTripoSGAttnProcessor2_0:
                 1, 2
             )
 
+        # NOTE that pre-trained split heads first, then split qkv
         if encoder_hidden_states is None:
             qkv = attn.to_qkv(hidden_states)
             split_size = qkv.shape[-1] // attn.heads // 3
@@ -370,11 +390,14 @@ class FusedTripoSGAttnProcessor2_0:
         if attn.norm_k is not None:
             key = attn.norm_k(key)
 
+        # Apply RoPE if needed
         if image_rotary_emb is not None:
             query = apply_rotary_emb(query, image_rotary_emb)
             if not attn.is_cross_attention:
                 key = apply_rotary_emb(key, image_rotary_emb)
 
+        # the output of sdp = (batch, num_heads, seq_len, head_dim)
+        # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
@@ -384,7 +407,9 @@ class FusedTripoSGAttnProcessor2_0:
         )
         hidden_states = hidden_states.to(query.dtype)
 
+        # linear proj
         hidden_states = attn.to_out[0](hidden_states)
+        # dropout
         hidden_states = attn.to_out[1](hidden_states)
 
         if input_ndim == 4:
@@ -399,6 +424,7 @@ class FusedTripoSGAttnProcessor2_0:
 
         return hidden_states
 
+# Modified from https://github.com/VAST-AI-Research/MIDI-3D/blob/main/midi/models/attention_processor.py#L264
 class PartCrafterAttnProcessor:
     r"""
     Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0). This is
@@ -446,6 +472,8 @@ class PartCrafterAttnProcessor:
             attention_mask = attn.prepare_attention_mask(
                 attention_mask, sequence_length, batch_size
             )
+            # scaled_dot_product_attention expects attention_mask shape to be
+            # (batch, heads, source_length, target_length)
             attention_mask = attention_mask.view(
                 batch_size, attn.heads, -1, attention_mask.shape[-1]
             )
@@ -467,6 +495,8 @@ class PartCrafterAttnProcessor:
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
 
+        # NOTE that pre-trained models split heads first then split qkv or kv, like .view(..., attn.heads, 3, dim)
+        # instead of .view(..., 3, attn.heads, dim). So we need to re-split here.
         if not attn.is_cross_attention:
             qkv = torch.cat((query, key, value), dim=-1)
             split_size = qkv.shape[-1] // attn.heads // 3
@@ -490,12 +520,14 @@ class PartCrafterAttnProcessor:
         if attn.norm_k is not None:
             key = attn.norm_k(key)
 
+        # Apply RoPE if needed
         if image_rotary_emb is not None:
             query = apply_rotary_emb(query, image_rotary_emb)
             if not attn.is_cross_attention:
                 key = apply_rotary_emb(key, image_rotary_emb)
 
         if isinstance(num_parts, torch.Tensor):
+            # Assume list in training, do not consider classifier-free guidance
             idx = 0
             hidden_states_list = []
             for n_p in num_parts:
@@ -504,6 +536,8 @@ class PartCrafterAttnProcessor:
                 q = query[idx : idx + n_p]
                 idx += n_p
                 if k.shape[2] == q.shape[2]:
+                    # Assuming self-attention
+                    # Here 'b' is always 1
                     k = rearrange(
                         k, "(b ni) h nt c -> b h (ni nt) c", ni=n_p
                     ) # [b, h, ni*nt, c]
@@ -511,11 +545,15 @@ class PartCrafterAttnProcessor:
                         v, "(b ni) h nt c -> b h (ni nt) c", ni=n_p
                     ) # [b, h, ni*nt, c]
                 else:
+                    # Assuming cross-attention
+                    # Here 'b' is always 1
                     k = k[::n_p]     # [b, h, nt, c]
                     v = v[::n_p]     # [b, h, nt, c]
+                # Here 'b' is always 1
                 q = rearrange(
                     q, "(b ni) h nt c -> b h (ni nt) c", ni=n_p
                 ) # [b, h, ni*nt, c]
+                # the output of sdp = (batch, num_heads, seq_len, head_dim)
                 h_s = F.scaled_dot_product_attention(
                     q, k, v,
                     dropout_p=0.0,
@@ -529,7 +567,10 @@ class PartCrafterAttnProcessor:
             hidden_states = torch.cat(hidden_states_list, dim=0)
 
         elif isinstance(num_parts, int):
+            # Assume single instance
             if key.shape[2] == query.shape[2]:
+                # Assuming self-attention
+                # Here we need 'b' when using classifier-free guidance
                 key = rearrange(
                     key, "(b ni) h nt c -> b h (ni nt) c", ni=num_parts
                 ) # [b, h, ni*nt, c]
@@ -537,12 +578,17 @@ class PartCrafterAttnProcessor:
                     value, "(b ni) h nt c -> b h (ni nt) c", ni=num_parts
                 ) # [b, h, ni*nt, c]
             else:
+                # Assuming cross-attention
+                # Here we need 'b' when using classifier-free guidance
+                # Control signal is repeated ni times within each (b, ni)
+                # We select only the first instance per group
                 key = key[::num_parts]     # [b, h, nt, c]
                 value = value[::num_parts] # [b, h, nt, c]
             query = rearrange(
                 query, "(b ni) h nt c -> b h (ni nt) c", ni=num_parts
             ) # [b, h, ni*nt, c]
 
+            # the output of sdp = (batch, num_heads, seq_len, head_dim)
             hidden_states = F.scaled_dot_product_attention(
                 query,
                 key,
@@ -559,8 +605,10 @@ class PartCrafterAttnProcessor:
             raise ValueError(
                 "num_parts must be a torch.Tensor or int, but got {}".format(type(num_parts))
             )
-        
+
+        # linear proj
         hidden_states = attn.to_out[0](hidden_states)
+        # dropout
         hidden_states = attn.to_out[1](hidden_states)
 
         if input_ndim == 4:

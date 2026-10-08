@@ -8,6 +8,7 @@ from torch.optim import lr_scheduler
 from diffusers.training_utils import *
 from diffusers.optimization import get_scheduler
 
+# https://github.com/huggingface/diffusers/pull/9812: fix `self.use_ema_warmup`
 class MyEMAModel(EMAModel):
     """
     Exponential Moving Average of models weights
@@ -61,6 +62,8 @@ class MyEMAModel(EMAModel):
             )
             parameters = parameters.parameters()
 
+            # # set use_ema_warmup to True if a torch.nn.Module is passed for backwards compatibility
+            # use_ema_warmup = True
 
         if kwargs.get("max_value", None) is not None:
             deprecation_message = "The `max_value` argument is deprecated. Please use `decay` instead."
@@ -107,9 +110,11 @@ class MyEMAModel(EMAModel):
         if self.use_ema_warmup:
             cur_decay_value = 1 - (1 + step / self.inv_gamma) ** -self.power
         else:
+            # cur_decay_value = (1 + step) / (10 + step)
             cur_decay_value = self.decay
 
         cur_decay_value = min(cur_decay_value, self.decay)
+        # make sure decay is not smaller than min_decay
         cur_decay_value = max(cur_decay_value, self.min_decay)
         return cur_decay_value
 
@@ -158,8 +163,8 @@ def get_lr_scheduler(name: str, optimizer: Optimizer, **kwargs) -> LRScheduler:
         raise NotImplementedError(f"Not implemented lr scheduler: {name}")
 
 def save_experiment_params(
-    args: Namespace, 
-    configs: DictConfig, 
+    args: Namespace,
+    configs: DictConfig,
     save_dir: str
 ) -> Dict[str, Any]:
     params = OmegaConf.merge(configs, {"args": {k: str(v) for k, v in vars(args).items()}})

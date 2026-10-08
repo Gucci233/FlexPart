@@ -9,7 +9,7 @@ import torch
 import trimesh
 from diffusers.image_processor import PipelineImageInput
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler  
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils import logging
 from diffusers.utils.torch_utils import randn_tensor
 from transformers import (
@@ -26,6 +26,7 @@ from ..utils.postprocess import postprocess_mesh,filter_mesh
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
+# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
 def retrieve_timesteps(
     scheduler,
     num_inference_steps: Optional[int] = None,
@@ -93,11 +94,11 @@ def retrieve_timesteps(
 
 class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
     """
-    Pipeline for image to 3D part-level object generation.       
+    Pipeline for image to 3D part-level object generation.
     """
 
     def __init__(
-        self,   
+        self,
         vae: TripoSGVAEModel,
         transformer: FlexPartDiTModel,
         scheduler: FlowMatchEulerDiscreteScheduler,
@@ -187,7 +188,7 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         bounds: Union[Tuple[float], List[float], float] = (-1.005, -1.005, -1.005, 1.005, 1.005, 1.005),
-        dense_octree_depth: int = 8, 
+        dense_octree_depth: int = 8,
         hierarchical_octree_depth: int = 9,
         max_num_expanded_coords: int = 1e8,
         flash_octree_depth: int = 9,
@@ -203,10 +204,13 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
 
         box3d_prompt : Optional[torch.Tensor] = None,
     ):
+        # 1. Define call parameters
         self._guidance_scale = guidance_scale
         self._attention_kwargs = attention_kwargs
         self._interrupt = False
 
+        # self.do_classifier_free_guidance=False
+        # 2. Define call parameters
         if isinstance(image, PIL.Image.Image):
             batch_size = 1
         elif isinstance(image, list):
@@ -219,6 +223,7 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
         device = self._execution_device
         dtype = self.image_encoder_dinov2.dtype
 
+        # 3. Encode condition
         image_embeds, negative_image_embeds = self.encode_image(
             image, device, num_images_per_prompt
         )
@@ -231,6 +236,9 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
         if masks_prompt:
             masks_prompt = [torch.FloatTensor(mask).to(device=device,dtype=dtype) for mask in masks_prompt]
             masks_prompt = torch.stack(masks_prompt,dim=0)
+        # if box3d_prompt:
+        #     box3d_prompt = [torch.FloatTensor(box3d).to(device=device,dtype=dtype) for box3d in box3d_prompt]
+        #     box3d_prompt = torch.stack(box3d_prompt,dim=0)
 
 
         if valid_points:
@@ -251,7 +259,9 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
             valid_points = torch.cat([valid_points]*2, dim=0) if valid_points is not None else None
             valid_boxes = torch.cat([valid_boxes]*2, dim=0) if valid_boxes is not None else None
             valid_masks = torch.cat([valid_masks]*2, dim=0) if valid_masks is not None else None
+            # box3d_prompt = torch.cat([box3d_prompt]*2, dim=0) if valid_masks is not None else None
 
+        # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(
             self.scheduler, num_inference_steps, device, timesteps
         )
@@ -260,6 +270,7 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
         )
         self._num_timesteps = len(timesteps)
 
+        # 5. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels
         latents = self.prepare_latents(
             batch_size * num_images_per_prompt,
@@ -271,8 +282,9 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
             latents,
         )
 
+        # 6. Denoising loop
         self.set_progress_bar_config(
-            desc="Denoising", 
+            desc="Denoising",
             ncols=125,
             disable=self._progress_bar_config['disable'] if hasattr(self, '_progress_bar_config') else False,
         )
@@ -281,11 +293,13 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
                 if self.interrupt:
                     continue
 
+                # expand the latents if we are doing classifier free guidance
                 latent_model_input = (
                     torch.cat([latents] * 2)
                     if self.do_classifier_free_guidance
                     else latents
                 )
+                # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
 
                 noise_pred = self.transformer(
@@ -304,12 +318,14 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
                    box3d_prompt = box3d_prompt
                 )[0].to(dtype)
 
+                # perform guidance
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_image = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (
                         noise_pred_image - noise_pred_uncond
                     )
 
+                # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
                 latents = self.scheduler.step(
                     noise_pred, t, latents, return_dict=False
@@ -317,6 +333,7 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
+                        # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
                         latents = latents.to(latents_dtype)
 
                 if callback_on_step_end is not None:
@@ -339,16 +356,18 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
                         "negative_image_embeds_2", negative_image_embeds_2
                     )
 
+                # call the callback, if provided
                 if i == len(timesteps) - 1 or (
                     (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
                 ):
                     progress_bar.update()
 
 
+        # 7. decoder mesh
         self.vae.set_flash_decoder()
         output, meshes = [], []
         self.set_progress_bar_config(
-            desc="Decoding", 
+            desc="Decoding",
             ncols=125,
             disable=self._progress_bar_config['disable'] if hasattr(self, '_progress_bar_config') else False,
         )
@@ -364,6 +383,7 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
                         dense_octree_depth=dense_octree_depth,
                         hierarchical_octree_depth=hierarchical_octree_depth,
                         max_num_expanded_coords=max_num_expanded_coords,
+                        # verbose=True
                     )
                     mesh = trimesh.Trimesh(mesh_v_f[0].astype(np.float32), mesh_v_f[1].astype(np.float32))
                     mesh = filter_mesh(mesh)
@@ -376,7 +396,8 @@ class FlexPartPipeline(DiffusionPipeline, TransformerDiffusionMixin):
                 output.append(mesh_v_f)
                 meshes.append(mesh)
                 progress_bar.update()
-       
+
+        # Offload all models
         self.maybe_free_model_hooks()
 
         if not return_dict:

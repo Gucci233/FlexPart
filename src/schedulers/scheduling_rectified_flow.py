@@ -16,6 +16,7 @@ from torch.distributions import LogisticNormal
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
+# TODO: may move to training_utils.py
 def compute_density_for_timestep_sampling(
     weighting_scheme: str,
     batch_size: int,
@@ -24,6 +25,7 @@ def compute_density_for_timestep_sampling(
     mode_scale: float = None,
 ):
     if weighting_scheme == "logit_normal":
+        # See 3.1 in the SD3 paper ($rf/lognorm(0.00,1.00)$).
         u = torch.normal(
             mean=logit_mean, std=logit_std, size=(batch_size,), device="cpu"
         )
@@ -101,6 +103,9 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin):
         shift: float = 1.0,
         use_dynamic_shifting: bool = False,
     ):
+        # pre-compute timesteps and sigmas; no use in fact
+        # NOTE that shape diffusion sample timesteps randomly or in a distribution,
+        # instead of sampling from the pre-defined linspace
         timesteps = np.array(
             [
                 (1.0 - i / num_train_timesteps) * num_train_timesteps
@@ -111,6 +116,7 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin):
 
         sigmas = timesteps / num_train_timesteps
         if not use_dynamic_shifting:
+            # when use_dynamic_shifting is True, we apply the timestep shifting on the fly based on the image resolution
             sigmas = self.time_shift(sigmas)
 
         self.timesteps = sigmas * num_train_timesteps
@@ -134,6 +140,7 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin):
         """
         return self._begin_index
 
+    # Copied from diffusers.schedulers.scheduling_dpmsolver_multistep.DPMSolverMultistepScheduler.set_begin_index
     def set_begin_index(self, begin_index: int = 0):
         """
         Sets the begin index for the scheduler. This function should be run from pipeline before the inference.
@@ -208,6 +215,10 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin):
 
         indices = (schedule_timesteps == timestep).nonzero()
 
+        # The sigma index that is taken for the **very** first `step`
+        # is always the second index (or the last index if there is only 1)
+        # This way we can ensure we don't accidentally skip a sigma in
+        # case we start in the middle of the denoising schedule (e.g. for image-to-image)
         pos = 1 if len(indices) > 1 else 0
 
         return indices[pos].item()
@@ -276,15 +287,19 @@ class RectifiedFlowScheduler(SchedulerMixin, ConfigMixin):
         if self.step_index is None:
             self._init_step_index(timestep)
 
+        # Upcast to avoid precision issues when computing prev_sample
         sample = sample.to(torch.float32)
 
         sigma = self.sigmas[self.step_index]
         sigma_next = self.sigmas[self.step_index + 1]
 
+        # Here different directions are used for the flow matching
         prev_sample = sample + (sigma - sigma_next) * model_output
 
+        # Cast sample back to model compatible dtype
         prev_sample = prev_sample.to(model_output.dtype)
 
+        # upon completion increase step index by one
         self._step_index += 1
 
         if not return_dict:

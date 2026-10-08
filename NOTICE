@@ -1,0 +1,3 @@
+Tencent Hunyuan is licensed under the Tencent Hunyuan Community License Agreement, Copyright © 2024 Tencent. All Rights Reserved. The trademark rights of “Tencent Hunyuan” are owned by Tencent or its affiliate.
+
+The unconditioned DiTBlock in src/models/transformers/dit_block.py is extracted from PartCrafter (Copyright (c) 2025 Yuchen Lin), based on TripoSG and HunyuanDiT. The upstream license and acceptable use policy are preserved in that file.

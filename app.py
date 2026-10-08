@@ -1,3 +1,13 @@
+import argparse
+
+parser = argparse.ArgumentParser(description="FlexPart interactive point/box demo.")
+parser.add_argument('--model_path', default='./weight/FlexPart')
+parser.add_argument('--rmbg_model_path', default='./weight/RMBG-1.4')
+parser.add_argument('--output_dir', default='./output_gradio')
+parser.add_argument('--server_name', default='127.0.0.1')
+parser.add_argument('--server_port', type=int, default=7860)
+args = parser.parse_args() if __name__ == '__main__' else parser.parse_args([])
+
 import gradio as gr
 from gradio_image_prompter import ImagePrompter
 import os
@@ -9,7 +19,7 @@ from PIL import Image
 from accelerate.utils import set_seed
 import torch.nn.functional as F
 from torchvision import transforms
-import time
+import time # 引入time用于模拟状态切换的流畅感
 
 from src.utils.data_utils import get_colored_mesh_composition
 from src.pipelines.pipeline_flexpart import FlexPartPipeline
@@ -20,13 +30,16 @@ from typing import Union
 
 DEVICE = "cuda"
 DTYPE = torch.float16
-OUTPUT_DIR = "./output_gradio"
+OUTPUT_DIR = args.output_dir
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-rmbg_model_path = "/path/to/your/model/RMBG-1.4"
+if not torch.cuda.is_available():
+    raise RuntimeError('The demo requires an NVIDIA GPU with CUDA support.')
+
+rmbg_model_path = args.rmbg_model_path
 rmbg_net = BriaRMBG.from_pretrained(rmbg_model_path).to(DEVICE).eval()
 
-flexpart_model_path = "/path/to/your/model/FlexPart"
+flexpart_model_path = args.model_path
 pipe = FlexPartPipeline.from_pretrained(flexpart_model_path)
 pipe = pipe.to(DEVICE, DTYPE)
 
@@ -106,8 +119,8 @@ def preprocess_on_upload(prompter_input):
             
         mask_tensor = F.interpolate(mask_tensor, size=(h, w), mode='bilinear', align_corners=False)
         
-        ma = torch.sigmoid(mask_tensor).squeeze().cpu().numpy()
-        ma = (ma - ma.min()) / (ma.max() - ma.min() + 1e-8)
+        # BriaRMBG already returns sigmoid probabilities.
+        ma = mask_tensor.squeeze().clamp(0, 1).cpu().numpy()
         
         pil_image.putalpha(Image.fromarray((ma * 255).astype(np.uint8)))
         
@@ -195,6 +208,8 @@ def generate_3d_mesh_generator(prompter_input, seed, guidance_scale, steps):
     
     if num_parts == 0:
         raise gr.Error("No annotations detected! Please click on the image to add points or boxes.")
+    if num_parts > pipe.transformer.config.max_num_parts:
+        raise gr.Error("The number of annotated parts exceeds the model capacity.")
 
     print(f"🚀 Starting inference: {num_parts} Parts")
 
@@ -240,6 +255,8 @@ def generate_3d_mesh_generator(prompter_input, seed, guidance_scale, steps):
         **prompts
     ).meshes
 
+    if any(m is None or len(m.faces) == 0 for m in outputs):
+        raise gr.Error("Mesh extraction returned an empty part. Try another seed or prompt.")
     clean_outputs = [filter_mesh(m) for m in outputs]
     merged_mesh = get_colored_mesh_composition(clean_outputs)
     merged_mesh = normalize_mesh(merged_mesh)
@@ -268,6 +285,10 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
             gen_btn = gr.Button("🚀 Generate 3D Mesh", variant="primary")
 
         with gr.Column(scale=1):
+            # 布局技巧：
+            # 1. status_overlay: 用于显示大字文字状态，初始隐藏
+            # 2. result_3d: 用于显示模型，初始显示（空）
+            # 生成时，二者可见性互换
             
             status_overlay = gr.HTML(
                 value="", 
@@ -300,6 +321,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         outputs=[prompter]
     )
 
+    # 使用 yield 机制的 generator 函数，可以多次更新 outputs
     gen_btn.click(
         fn=generate_3d_mesh_generator,
         inputs=[prompter, seed, scale, steps],
@@ -307,4 +329,4 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     )
 
 if __name__ == "__main__":
-    demo.queue().launch(server_name="0.0.0.0")
+    demo.queue().launch(server_name=args.server_name, server_port=args.server_port)

@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from ..attention_processor import FusedTripoSGAttnProcessor2_0, TripoSGAttnProcessor2_0, FlashTripo2AttnProcessor2_0
 from ..embeddings import FrequencyPositionalEmbedding
-from ..transformers.partcrafter_transformer import DiTBlock
+from ..transformers.dit_block import DiTBlock
 from .vae import DiagonalGaussianDistribution
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -202,6 +202,7 @@ class TripoSGDecoder(nn.Module):
                 hidden_states = block(hidden_states)
             kv_cache = hidden_states
 
+        # query grid logits by cross attention
         def query_fn(q, kv):
             q = self.proj_query(q)
             l = self.blocks[-1](q, encoder_hidden_states=kv)
@@ -269,6 +270,7 @@ class TripoSGVAEModel(ModelMixin, ConfigMixin):
     def set_flash_decoder(self):
         self.decoder.set_flash_processor(FlashTripo2AttnProcessor2_0())
 
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.fuse_qkv_projections with FusedAttnProcessor2_0->FusedTripoSGAttnProcessor2_0
     def fuse_qkv_projections(self):
         """
         Enables fused QKV projections. For self-attention modules, all projection matrices (i.e., query, key, value)
@@ -276,7 +278,7 @@ class TripoSGVAEModel(ModelMixin, ConfigMixin):
 
         <Tip warning={true}>
 
-        This API is 🧪 experimental.
+        This API is 馃И experimental.
 
         </Tip>
         """
@@ -296,12 +298,13 @@ class TripoSGVAEModel(ModelMixin, ConfigMixin):
 
         self.set_attn_processor(FusedTripoSGAttnProcessor2_0())
 
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.unfuse_qkv_projections
     def unfuse_qkv_projections(self):
         """Disables the fused QKV projection if enabled.
 
         <Tip warning={true}>
 
-        This API is 🧪 experimental.
+        This API is 馃И experimental.
 
         </Tip>
 
@@ -310,12 +313,14 @@ class TripoSGVAEModel(ModelMixin, ConfigMixin):
             self.set_attn_processor(self.original_attn_processors)
 
     @property
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.attn_processors
     def attn_processors(self) -> Dict[str, AttentionProcessor]:
         r"""
         Returns:
             `dict` of attention processors: A dictionary containing all attention processors used in the model with
             indexed by its weight name.
         """
+        # set recursively
         processors = {}
 
         def fn_recursive_add_processors(
@@ -336,6 +341,7 @@ class TripoSGVAEModel(ModelMixin, ConfigMixin):
 
         return processors
 
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attn_processor
     def set_attn_processor(
         self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]
     ):
@@ -416,6 +422,7 @@ class TripoSGVAEModel(ModelMixin, ConfigMixin):
             torch.arange(batch_size).to(x.device).repeat_interleave(num_points)
         )
 
+        # fps sampling
         sampling_ratio = 1.0 / 4
         sampled_indices = fps(
             flattened_points[:, :3],

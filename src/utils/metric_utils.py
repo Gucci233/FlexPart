@@ -27,6 +27,7 @@ def compute_nearest_distance(
     points2: np.ndarray,
     metric: str = 'l2'
 ) -> np.ndarray:
+    # Compute nearest neighbor distance from points1 to points2
     nn = NearestNeighbors(n_neighbors=1, leaf_size=30, algorithm='kd_tree', metric=metric).fit(points2)
     min_dist = nn.kneighbors(points1)[0]
     return min_dist

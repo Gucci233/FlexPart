@@ -4,6 +4,7 @@ import torch
 
 from .objaverse_part import ObjaversePartDataset, BatchedObjaversePartDataset
 
+# Copied from https://github.com/huggingface/pytorch-image-models/blob/main/timm/data/loader.py
 class MultiEpochsDataLoader(torch.utils.data.DataLoader):
 
     def __init__(self, *args, **kwargs):

@@ -46,6 +46,7 @@ def modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch
     x: [N, T, D]
     shift, scale: [N, D]
     """
+    # We unsqueeze(1) to make shift/scale broadcastable with x
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 class PointPromptEncoder(nn.Module):
@@ -56,10 +57,10 @@ class PointPromptEncoder(nn.Module):
   def __init__(self, output_dim: int, fourier_dim: int = 128, fourier_scale: float = 4.0):
     super().__init__()
     self.output_dim = output_dim
-    
+
     self.point_gff_encoder = GaussianFourierProjection(embedding_size=fourier_dim, scale=fourier_scale,log=False)
-    
-    prompt_input_dim = fourier_dim * 2 * 2 
+
+    prompt_input_dim = fourier_dim * 2 * 2
     self.prompt_mlp = nn.Sequential(
       nn.Linear(prompt_input_dim, self.output_dim),
       nn.ReLU(),
@@ -69,13 +70,13 @@ class PointPromptEncoder(nn.Module):
   def forward(self, point_prompt_xy: torch.Tensor) -> torch.Tensor:
     x_prompt = point_prompt_xy[:, 0:1] # [N, 1]
     y_prompt = point_prompt_xy[:, 1:2] # [N, 1]
-    
+
     x_embed = self.point_gff_encoder(x_prompt.squeeze(-1)) # [N, fourier_dim * 2]
     y_embed = self.point_gff_encoder(y_prompt.squeeze(-1)) # [N, fourier_dim * 2]
-    
+
     prompt_fourier_features = torch.cat([x_embed, y_embed], dim=-1)
     point_prompt_condition = self.prompt_mlp(prompt_fourier_features)
-    
+
     return point_prompt_condition
 
 
@@ -93,15 +94,15 @@ class BoxPromptEncoder(nn.Module):
     def __init__(self, output_dim: int, fourier_dim: int = 128, fourier_scale: float = 4.0):
         super().__init__()
         self.output_dim = output_dim
-        
+
         self.gff_encoder = GaussianFourierProjection(
             embedding_size=fourier_dim, scale=fourier_scale, log=False
         )
-        
-        gff_output_dim = fourier_dim * 2 * 2 
-        
+
+        gff_output_dim = fourier_dim * 2 * 2
+
         self.corner_type_embedding = nn.Embedding(2, gff_output_dim)
-        
+
         self.corner_mlp = nn.Sequential(
             nn.Linear(gff_output_dim, self.output_dim),
             nn.ReLU(),
@@ -111,29 +112,32 @@ class BoxPromptEncoder(nn.Module):
     def _encode_corner(self, xy_coords: torch.Tensor, corner_type: int) -> torch.Tensor:
         x_c = xy_coords[:, 0:1]
         y_c = xy_coords[:, 1:2]
-        
+
         x_embed = self.gff_encoder(x_c.squeeze(-1)) # [B, fourier_dim * 2]
         y_embed = self.gff_encoder(y_c.squeeze(-1)) # [B, fourier_dim * 2]
-        
+
         features = torch.cat([x_embed, y_embed], dim=-1)
-        
+
         type_emb = self.corner_type_embedding(
             torch.tensor(corner_type, device=features.device)
         )
-        
+
         return self.corner_mlp(features + type_emb)
 
     def forward(self, box_xyxy: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            box_xyxy (torch.Tensor): [B, 4] normalized coordinates (x1, y1, x2, y2)
+            box_xyxy (torch.Tensor): [B, 4] 归一化坐标 (x1, y1, x2, y2)
         """
+        # [B, 2]
         top_left = box_xyxy[:, :2]
         bottom_right = box_xyxy[:, 2:]
-        
+
+        # 编码两个角
         emb_tl = self._encode_corner(top_left, corner_type=0)     # [B, output_dim]
         emb_br = self._encode_corner(bottom_right, corner_type=1) # [B, output_dim]
-        
+
+        # 将两个嵌入相加，得到最终的 Box 嵌入
         box_embedding = emb_tl + emb_br
         return box_embedding
 
@@ -141,7 +145,7 @@ class BoxPromptEncoder(nn.Module):
 class MaskPromptEncoder(nn.Module):
     def __init__(self, output_dim=256):
         super().__init__()
-        base_dim = 16 
+        base_dim = 16
         self.conv_net = nn.Sequential(
             nn.Conv2d(1, base_dim, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(base_dim),
@@ -153,7 +157,7 @@ class MaskPromptEncoder(nn.Module):
             nn.BatchNorm2d(base_dim*4),
             nn.ReLU(),
         )
-        
+
         self.gap = nn.AdaptiveAvgPool2d((1, 1))
         self.proj = nn.Linear(base_dim * 4, output_dim)
 
@@ -164,28 +168,28 @@ class MaskPromptEncoder(nn.Module):
             x = masks
 
         B, C, H, W = x.shape
-        
+
         x = F.interpolate(x, size=(512, 512), mode='nearest')
-        
+
         feat = self.conv_net(x)
         feat = self.gap(feat).flatten(1)
-        feat = self.proj(feat) 
-        
+        feat = self.proj(feat)
+
         return feat
 
 class Box3DPromptEncoder(nn.Module):
     def __init__(self, output_dim: int, fourier_dim: int = 128, fourier_scale: float = 4.0):
         super().__init__()
         self.output_dim = output_dim
-        
+
         self.gff_encoder = GaussianFourierProjection(
             embedding_size=fourier_dim, scale=fourier_scale,log=False
         )
-        
+
         gff_output_dim = fourier_dim * 2 * 3
-        
+
         self.corner_type_embedding = nn.Embedding(2, gff_output_dim)
-        
+
         self.corner_mlp = nn.Sequential(
             nn.Linear(gff_output_dim, self.output_dim),
             nn.LayerNorm(self.output_dim),
@@ -197,29 +201,31 @@ class Box3DPromptEncoder(nn.Module):
         x = xyz_coords[:, 0]
         y = xyz_coords[:, 1]
         z = xyz_coords[:, 2]
-        
+
         x_emb = self.gff_encoder(x)
         y_emb = self.gff_encoder(y)
         z_emb = self.gff_encoder(z)
-        
+
         features = torch.cat([x_emb, y_emb, z_emb], dim=-1)
-        
+
         type_emb = self.corner_type_embedding(
             torch.tensor(corner_type, device=features.device)
         )
-        
+
         return self.corner_mlp(features + type_emb)
 
     def forward(self, box_3d: torch.Tensor) -> torch.Tensor:
         box_3d = box_3d
+        # 分解为 Min 角和 Max 角
         min_corner = box_3d[:, 0, :] # [B, 3]
         max_corner = box_3d[:, 1, :] # [B, 3]
-        
+
+        # 分别编码
         emb_min = self._encode_corner(min_corner, corner_type=0)
         emb_max = self._encode_corner(max_corner, corner_type=1)
-        
+
         box_embedding = emb_min + emb_max
-        
+
         return box_embedding
 
 class SinkhornWithDustbin(nn.Module):
@@ -255,20 +261,28 @@ class SinkhornWithDustbin(nn.Module):
         device = logits.device
         b = self.bin_score
 
+        # Build augmented logit matrix L of shape [B, N+1, M+1]
         L = logits.new_full((B, N + 1, M + 1), fill_value=-1e4)  # large negative for unused by default
 
+        # top-left: original logits
         L[:, :N, :M] = logits
 
+        # top-right: row -> bin (N x 1) fill with b
         L[:, :N, M] = b
 
+        # bottom-left: bin <- col (1 x M) fill with b
         L[:, N, :M] = b
 
+        # bottom-right: bin-bin = 0
         L[:, N, M] = 0.0
 
+        # Optional: mask invalid rows/cols by setting to -inf so they get zero prob.
+        # mask_row: if provided, shape [B, N] or [N]
         if mask_row is not None:
             mr = mask_row
             if mr.dim() == 1:
                 mr = mr.unsqueeze(0).expand(B, -1)  # [B, N]
+            # where invalid rows -> set entire that row (except bin) to large negative
             invalid = (~mr).to(torch.bool)
             if invalid.any():
                 L[invalid, :M] = -1e9  # sets top-left entries in invalid rows
@@ -282,10 +296,13 @@ class SinkhornWithDustbin(nn.Module):
                 L[invalidc, :, :M] = -1e9  # careful broadcasting, you may want explicit loops
                 L[:, N, invalidc] = b     # keep col->bin
 
+        # Sinkhorn in log-space
         log_alpha = L  # already logits scaled outside
 
         for _ in range(self.n_iters):
+            # row normalize: logsumexp over columns
             log_alpha = log_alpha - torch.logsumexp(log_alpha, dim=2, keepdim=True)
+            # col normalize: logsumexp over rows
             log_alpha = log_alpha - torch.logsumexp(log_alpha, dim=1, keepdim=True)
 
         P = torch.exp(log_alpha)  # [B, N+1, M+1]
@@ -296,6 +313,7 @@ class SinkhornWithDustbin(nn.Module):
         P_bin = P[:, N, M]
 
         if single:
+            # squeeze batch dim
             return {
                 "P_aug": P[0],
                 "P_match": P_match[0],
@@ -316,7 +334,7 @@ class PartVisualBridge(nn.Module):
     def __init__(self, part_dim=256, image_dim=768, num_heads=8):
         super().__init__()
         self.cross_attn = nn.MultiheadAttention(embed_dim=part_dim, kdim=image_dim, vdim=image_dim, num_heads=num_heads, batch_first=True)
-        
+
         self.norm1 = nn.LayerNorm(part_dim)
         self.norm2 = nn.LayerNorm(part_dim)
         self.ffn = nn.Sequential(
@@ -326,23 +344,27 @@ class PartVisualBridge(nn.Module):
         )
 
     def forward(self, part_emb, image_emb):
+        # 1. Cross Attention
+        # query=part, key=value=image
         part_emb = part_emb.unsqueeze(1)
         attn_out, _ = self.cross_attn(query=self.norm1(part_emb), key=image_emb, value=image_emb)
-        
+
+        # Residual Connection
         x = part_emb + attn_out
-        
+
+        # 2. FFN
         x = x + self.ffn(self.norm2(x))
         return x.squeeze(1)
-    
+
 @maybe_allow_in_graph
 class DiTBlock(nn.Module):
     def __init__(
         self,
         dim: int,
         num_attention_heads: int,
-        adaln_input_dim: Optional[int] = None,# <--- required parameter
+        adaln_input_dim: Optional[int] = None,# <--- 必需参数
         use_self_attention: bool = True,
-        self_attention_norm_type: Optional[str] = None, 
+        self_attention_norm_type: Optional[str] = None,
         use_cross_attention: bool = True,
         cross_attention_dim: Optional[int] = None,
         cross_attention_norm_type: Optional[str] = "fp32_layer_norm",
@@ -423,7 +445,7 @@ class DiTBlock(nn.Module):
         inner_dim=ff_inner_dim,
         bias=ff_bias,
         )
-        
+
         self.adaLN_modulation = None
 
         if skip:
@@ -434,7 +456,7 @@ class DiTBlock(nn.Module):
 
         self._chunk_size = None
         self._chunk_dim = 0
-  
+
     def set_topk(self, topk):
         self.flash_processor.topk = topk
 
@@ -442,7 +464,9 @@ class DiTBlock(nn.Module):
         self.flash_processor = flash_processor
         self.attn2.processor = self.flash_processor
 
+    # Copied from diffusers.models.attention.BasicTransformerBlock.set_chunk_feed_forward
     def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 0):
+        # Sets chunk feed-forward
         self._chunk_size = chunk_size
         self._chunk_dim = dim
 
@@ -454,7 +478,7 @@ class DiTBlock(nn.Module):
         if self.use_cross_attention:
             num_params += self.dim * 3
         num_params += self.dim * 3 # for FeedForward
-        
+
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(self.adaln_input_dim, num_params)
@@ -465,18 +489,18 @@ class DiTBlock(nn.Module):
         hidden_states: torch.Tensor,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         temb: Optional[torch.Tensor] = None,
-        part_condition: Optional[torch.Tensor] = None, # <--- AdaLN condition
+        part_condition: Optional[torch.Tensor] = None, # <--- AdaLN 条件
         image_rotary_emb: Optional[torch.Tensor] = None,
         skip: Optional[torch.Tensor] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
     ) -> torch.Tensor:
-    
+
         attention_kwargs = attention_kwargs or {}
-        
+
         assert part_condition is not None, "Gated AdaLN modulation requires part_condition"
-        
+
         all_params = self.adaLN_modulation(part_condition)
-        
+
         param_list = list(all_params.chunk(all_params.shape[1] // hidden_states.shape[-1], dim=1))
 
         if self.skip_linear is not None:
@@ -499,7 +523,7 @@ class DiTBlock(nn.Module):
             shift_attn1 = param_list.pop(0)
             scale_attn1 = param_list.pop(0)
             gate_attn1 = param_list.pop(0)
-        
+
             norm_x = self.norm1(hidden_states)
             modulated_x = modulate(norm_x, shift_attn1, scale_attn1)
             attn_output = self.attn1(
@@ -513,7 +537,7 @@ class DiTBlock(nn.Module):
             shift_attn2 = param_list.pop(0)
             scale_attn2 = param_list.pop(0)
             gate_attn2 = param_list.pop(0)
-        
+
             norm_x = self.norm2(hidden_states)
             modulated_x = modulate(norm_x, shift_attn2, scale_attn2)
             attn_output = self.attn2(
@@ -527,7 +551,7 @@ class DiTBlock(nn.Module):
         shift_ff = param_list.pop(0)
         scale_ff = param_list.pop(0)
         gate_ff = param_list.pop(0)
-        
+
         norm_x = self.norm3(hidden_states)
         modulated_x = modulate(norm_x, shift_ff, scale_ff)
         ff_output = self.ff(modulated_x)
@@ -591,7 +615,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         in_channels: int = 64,
         num_layers: int = 21,
         cross_attention_dim: int = 1024,
-        max_num_parts: int = 32, 
+        max_num_parts: int = 32,
         enable_part_embedding=True,
         enable_local_cross_attn: bool = True,
         enable_global_cross_attn: bool = True,
@@ -628,6 +652,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         self.proj_in = nn.Linear(self.config.in_channels, self.inner_dim, bias=True)
 
+        # 调制设置
         self.use_gated_adaln = enable_point_prompt | enable_box_prompt | enable_mask_prompt | enable_3dbox_prompt
 
         if self.use_gated_adaln:
@@ -678,16 +703,19 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.global_attn_block_ids = global_attn_block_ids
 
         if len(global_attn_block_ids) > 0:
+            # Override self-attention processors for global attention blocks
             attn_processor_dict = {}
             modified_attn_processor = []
             for layer_id in range(num_layers):
                 for attn_id in [1, 2]:
                     if layer_id in global_attn_block_ids:
+                        # apply to both self-attention and cross-attention
                         attn_processor_dict[f'blocks.{layer_id}.attn{attn_id}.processor'] = PartCrafterAttnProcessor()
                         modified_attn_processor.append(f'blocks.{layer_id}.attn{attn_id}.processor')
                     else:
                         attn_processor_dict[f'blocks.{layer_id}.attn{attn_id}.processor'] = TripoSGAttnProcessor2_0()
             self.set_attn_processor(attn_processor_dict)
+            # logger.info(f"Modified {modified_attn_processor} to PartCrafterAttnProcessor")
         self.enable_part_embedding = enable_part_embedding
         self.max_num_parts = max_num_parts
 
@@ -705,7 +733,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             self.add_modules()
 
     def add_modules(self):
-        
+
         for block in self.blocks:
             if hasattr(block, "add_adaln_modules"):
                 block.add_adaln_modules()
@@ -747,16 +775,17 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             nn.ReLU(),
             nn.Linear(self.adaln_cond_dim, self.adaln_cond_dim)
         )
-        
+
         self.visual_bridge = PartVisualBridge(part_dim=self.prompt_dim,image_dim=self.cross_attention_dim)
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         self.sinkhorn = SinkhornWithDustbin(init_value=1.0)
 
     def _set_gradient_checkpointing(
-        self, 
-        enable: bool = False, 
+        self,
+        enable: bool = False,
         gradient_checkpointing_func: Optional[Callable] = None,
     ):
+        # TODO: implement gradient checkpointing
         self.gradient_checkpointing = enable
 
     def _set_time_proj(
@@ -792,6 +821,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         return time_embed_dim, timestep_input_dim
 
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.fuse_qkv_projections with FusedAttnProcessor2_0->FusedTripoSGAttnProcessor2_0
     def fuse_qkv_projections(self):
         """
         Enables fused QKV projections. For self-attention modules, all projection matrices (i.e., query, key, value)
@@ -819,6 +849,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         self.set_attn_processor(FusedTripoSGAttnProcessor2_0())
 
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.unfuse_qkv_projections
     def unfuse_qkv_projections(self):
         """Disables the fused QKV projection if enabled.
 
@@ -833,12 +864,14 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             self.set_attn_processor(self.original_attn_processors)
 
     @property
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.attn_processors
     def attn_processors(self) -> Dict[str, AttentionProcessor]:
         r"""
         Returns:
             `dict` of attention processors: A dictionary containing all attention processors used in the model with
             indexed by its weight name.
         """
+        # set recursively
         processors = {}
 
         def fn_recursive_add_processors(
@@ -859,6 +892,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         return processors
 
+    # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.set_attn_processor
     def set_attn_processor(
         self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]
     ):
@@ -903,17 +937,19 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
     def forward(
         self,
-        hidden_states: Optional[torch.Tensor], # [Total_Parts, T, D] (note that batch is already total parts)
+        hidden_states: Optional[torch.Tensor], # [Total_Parts, T, D] (注意这里 batch 已经是 total parts)
         timestep: Union[int, float, torch.LongTensor],
-        encoder_hidden_states: Optional[torch.Tensor] = None, # 🟢 [Total_Parts, 257, 1024] (DINO, expanded)
+        encoder_hidden_states: Optional[torch.Tensor] = None, # 🟢 [Total_Parts, 257, 1024] (DINO, 已扩展)
         image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
 
+        # --- Prompts ---
         point_prompt_xy: Optional[torch.Tensor] = None,
         box_prompt_xyxy: Optional[torch.Tensor] = None,
         mask_prompt: Optional[torch.Tensor] = None,
-        
+
+        # --- Dropout Masks ---
         keep_point: Optional[torch.Tensor] = None,
         keep_box: Optional[torch.Tensor] = None,
         keep_mask: Optional[torch.Tensor] = None,
@@ -923,7 +959,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         if attention_kwargs is not None:
             attention_kwargs = attention_kwargs.copy()
             lora_scale = attention_kwargs.pop("scale", 1.0)
-            num_parts = attention_kwargs["num_parts"] # must have, for Locator interaction
+            num_parts = attention_kwargs["num_parts"] # 必须有，用于 Locator 交互
         else:
             raise ValueError("attention_kwargs with 'num_parts' is required.")
 
@@ -932,13 +968,13 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         if USE_PEFT_BACKEND:
             scale_lora_layers(self, lora_scale)
-        
+
         _, T, _ = hidden_states.shape
         temb = self.time_embed(timestep).to(hidden_states.dtype)
         temb = self.time_proj(temb)
         temb = temb.unsqueeze(dim=1)
         hidden_states = self.proj_in(hidden_states)
-        hidden_states = torch.cat([temb, hidden_states], dim=1) 
+        hidden_states = torch.cat([temb, hidden_states], dim=1)
 
         if self.enable_part_embedding:
             if isinstance(num_parts, torch.Tensor):
@@ -949,16 +985,18 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 part_emb_base = torch.cat(part_embeddings, dim=0)
             elif isinstance(num_parts, int):
                 part_emb_base = self.part_embedding(torch.arange(total_parts_batch, device=device))
-            
-            hidden_states = torch.cat([part_emb_base.unsqueeze(1), hidden_states], dim=1) 
 
-        dino_patches = encoder_hidden_states[:, 1:, :] 
+            # hidden_states = hidden_states + part_emb_base.unsqueeze(dim=1)
+            hidden_states = torch.cat([part_emb_base.unsqueeze(1), hidden_states], dim=1)
 
-        
+        dino_patches = encoder_hidden_states[:, 1:, :]
+
+
+        # --- Point Encoding ---
         final_point_emb = None
         if self.enable_point_prompt:
             final_point_emb = self.null_point_prompt_emb.weight.expand(total_parts_batch, -1)
-        
+
             target_xy = point_prompt_xy
             if target_xy is not None:
                 real_point_emb = self.point_prompt_encoder(target_xy)
@@ -968,6 +1006,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 else:
                     final_point_emb = real_point_emb
 
+        # --- Box Encoding ---
         final_box_emb = None
         if self.enable_box_prompt:
             final_box_emb = self.null_box_prompt_emb.weight.expand(total_parts_batch, -1)
@@ -976,6 +1015,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 mask_b = keep_box.view(-1, 1)
                 final_box_emb = torch.where(mask_b, real_box_emb, final_box_emb)
 
+        # --- Mask Encoding ---
         final_mask_emb = None
         if self.enable_mask_prompt:
             final_mask_emb = self.null_mask_prompt_emb.weight.expand(total_parts_batch, -1)
@@ -984,16 +1024,18 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 mask_m = keep_mask.view(-1, 1)
                 final_mask_emb = torch.where(mask_m, real_mask_emb, final_mask_emb)
 
+        # --- 3D Box Encoding ---
         final_box3d_emb = None
         if self.enable_3dbox_prompt:
             final_box3d_emb = self.null_box3d_prompt_emb.weight.expand(total_parts_batch, -1)
             if box3d_prompt is not None:
                 real_box3d_emb = self.box3d_prompt_encoder(box3d_prompt)
+                # box3d_m = keep_mask.view(-1, 1)
                 final_box3d_emb = real_box3d_emb
 
 
-        feature_list = [] 
-        if self.enable_point_prompt: feature_list.append(final_point_emb) 
+        feature_list = []
+        if self.enable_point_prompt: feature_list.append(final_point_emb)
         if self.enable_box_prompt:   feature_list.append(final_box_emb)
         if self.enable_mask_prompt:  feature_list.append(final_mask_emb)
         if self.enable_3dbox_prompt:  feature_list.append(final_box3d_emb)
@@ -1002,25 +1044,28 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         final_adaln_input = self.combiner_mlp(combined_feature_raw)
 
         aux_loss = torch.tensor(0.0, device=device)
-        
+
         if self.training and hasattr(self, 'sinkhorn'):
             if self.enable_point_prompt and keep_point is not None:
                 student_feature = final_point_emb
 
+            # Teachers
             mask_teacher_feat = None
             box_teacher_feat = None
             if self.enable_mask_prompt and mask_prompt is not None:
                 mask_teacher_feat = real_mask_emb.detach()
             if self.enable_box_prompt and box_prompt_xyxy is not None:
                 box_teacher_feat = real_box_emb.detach()
-            
+
+            # Bridge Alignment
             if (mask_teacher_feat is not None or box_teacher_feat is not None):
                 feat_student = self.visual_bridge(student_feature, dino_patches)
                 feat_student = F.normalize(feat_student, dim=-1)
-                
+
+                # Teacher Logits
                 final_logits = 0.0
                 count = 0
-                
+
                 if box_teacher_feat is not None:
                     feat_box = self.visual_bridge(box_teacher_feat, dino_patches)
                     feat_box = F.normalize(feat_box, dim=-1)
@@ -1032,38 +1077,46 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     feat_mask = F.normalize(feat_mask, dim=-1)
                     final_logits += 0.5 * (self.logit_scale.exp() * feat_student @ feat_mask.transpose(-2, -1))
                     count += 1
-                
+
                 if count == 1: final_logits *= 2.0
 
 
+                # Sinkhorn Loss
                 out = self.sinkhorn(final_logits)
                 log_P = torch.log(out["P_match"] + 1e-8)
                 labels = torch.arange(log_P.shape[0], device=log_P.device)
                 aux_loss = F.nll_loss(log_P, labels)
 
+        # 🟢 汇总
         all_loss = aux_loss
-        
+
+        # prepare negative encoder_hidden_states
         negative_encoder_hidden_states = torch.zeros_like(encoder_hidden_states) if encoder_hidden_states is not None else None
 
         skips = []
         for layer, block in enumerate(self.blocks):
             skip = None if layer <= self.config.num_layers // 2 else skips.pop()
             if (
-                (not self.enable_local_cross_attn) 
+                (not self.enable_local_cross_attn)
                 and len(self.global_attn_block_ids) > 0
                 and (layer not in self.global_attn_block_ids)
             ):
+                # If in non-global attention block and disable local cross attention, use negative encoder_hidden_states
+                # Do not inject control signal into non-global attention block
                 input_encoder_hidden_states = negative_encoder_hidden_states
             elif (
                 (not self.enable_global_cross_attn)
                 and len(self.global_attn_block_ids) > 0
                 and (layer in self.global_attn_block_ids)
             ):
+                # If in global attention block and disable global cross attention, use negative encoder_hidden_states
+                # Do not inject control signal into global attention block
                 input_encoder_hidden_states = negative_encoder_hidden_states
             else:
                 input_encoder_hidden_states = encoder_hidden_states
-            
+
             if len(self.global_attn_block_ids) > 0 and (layer in self.global_attn_block_ids):
+                # Inject control signal into global attention block
                 input_attention_kwargs = attention_kwargs
             else:
                 input_attention_kwargs = None
@@ -1104,11 +1157,13 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             if layer < self.config.num_layers // 2:
                 skips.append(hidden_states)
 
+        # final layer
         hidden_states = self.norm_out(hidden_states)
         hidden_states = hidden_states[:, -T:]  # (N, T, D)
         hidden_states = self.proj_out(hidden_states)
 
         if USE_PEFT_BACKEND:
+            # remove `lora_scale` from each PEFT layer
             unscale_lora_layers(self, lora_scale)
 
         if not return_dict:
@@ -1116,6 +1171,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         return Transformer1DModelOutput(sample=hidden_states,aux_loss=all_loss)
 
+    # Copied from diffusers.models.unets.unet_3d_condition.UNet3DConditionModel.enable_forward_chunking
     def enable_forward_chunking(
         self, chunk_size: Optional[int] = None, dim: int = 0
     ) -> None:
@@ -1134,6 +1190,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         if dim not in [0, 1]:
             raise ValueError(f"Make sure to set `dim` to either 0 or 1, not {dim}")
 
+        # By default chunk size is 1
         chunk_size = chunk_size or 1
 
         def fn_recursive_feed_forward(
@@ -1148,6 +1205,7 @@ class FlexPartDiTModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         for module in self.children():
             fn_recursive_feed_forward(module, chunk_size, dim)
 
+    # Copied from diffusers.models.unets.unet_3d_condition.UNet3DConditionModel.disable_forward_chunking
     def disable_forward_chunking(self):
         def fn_recursive_feed_forward(
             module: torch.nn.Module, chunk_size: int, dim: int

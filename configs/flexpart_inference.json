@@ -1,0 +1,20 @@
+{
+  "_class_name": "FlexPartDiTModel",
+  "num_attention_heads": 16,
+  "width": 2048,
+  "in_channels": 64,
+  "num_layers": 21,
+  "cross_attention_dim": 1024,
+  "max_num_parts": 32,
+  "enable_part_embedding": true,
+  "enable_local_cross_attn": true,
+  "enable_global_cross_attn": true,
+  "global_attn_block_ids": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20],
+  "enable_point_prompt": true,
+  "point_prompt_fourier_dim": 128,
+  "enable_box_prompt": true,
+  "box_prompt_fourier_dim": 128,
+  "enable_mask_prompt": true,
+  "enable_3dbox_prompt": false,
+  "add_module": true
+}

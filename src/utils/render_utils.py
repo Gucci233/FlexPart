@@ -27,7 +27,7 @@ def render(
     if light is not None:
         light_node = scene.add(light, pose=pose)
     image, depth = renderer.render(
-        scene, 
+        scene,
         flags=flags
     )
     scene.remove_node(camera_node)
@@ -59,6 +59,8 @@ def create_circular_camera_positions(
     radius: float,
     axis: np.ndarray = np.array([0.0, 1.0, 0.0])
 ) -> List[np.ndarray]:
+    # Create a list of positions for a circular camera trajectory
+    # around the given axis with the given radius.
     positions = []
     axis = axis / np.linalg.norm(axis)
     for i in range(num_views):
@@ -79,6 +81,10 @@ def create_circular_camera_poses(
     radius: float,
     axis: np.ndarray = np.array([0.0, 1.0, 0.0])
 ) -> List[np.ndarray]:
+    # Create a list of poses for a circular camera trajectory
+    # around the given axis with the given radius.
+    # The camera always looks at the origin.
+    # The up vector is always [0, 1, 0].
     canonical_pose = np.array([
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
@@ -106,18 +112,18 @@ def render_views_around_mesh(
     fov: float = 40.0,
     light_intensity: Optional[float] = 5.0,
     znear: float = 0.1,
-    zfar: float = 10.0, 
+    zfar: float = 10.0,
     normalize_depth: bool = False,
     flags: int = pyrender.constants.RenderFlags.NONE,
-    return_depth: bool = False, 
+    return_depth: bool = False,
     return_type: Literal['pil', 'ndarray'] = 'pil'
 ) -> Union[
-        List[Image.Image], 
-        List[np.ndarray], 
-        Tuple[List[Image.Image], List[Image.Image]], 
+        List[Image.Image],
+        List[np.ndarray],
+        Tuple[List[Image.Image], List[Image.Image]],
         Tuple[List[np.ndarray], List[np.ndarray]]
     ]:
-    
+
     if not isinstance(mesh, (trimesh.Trimesh, trimesh.Scene)):
         raise ValueError("mesh must be a trimesh.Trimesh or trimesh.Scene object")
     if isinstance(mesh, trimesh.Trimesh):
@@ -125,7 +131,7 @@ def render_views_around_mesh(
 
     scene = pyrender.Scene.from_trimesh_scene(mesh)
     light = pyrender.DirectionalLight(
-        color=np.ones(3), 
+        color=np.ones(3),
         intensity=light_intensity
     ) if light_intensity is not None else None
     camera = pyrender.PerspectiveCamera(
@@ -137,15 +143,15 @@ def render_views_around_mesh(
     renderer = pyrender.OffscreenRenderer(*image_size)
 
     camera_poses = create_circular_camera_poses(
-        num_views, 
-        radius, 
+        num_views,
+        radius,
         axis = axis
     )
 
     images, depths = [], []
     for pose in camera_poses:
         image, depth = render(
-            scene, renderer, camera, pose, light, 
+            scene, renderer, camera, pose, light,
             normalize_depth=normalize_depth,
             flags=flags,
             return_type=return_type
@@ -171,15 +177,15 @@ def render_normal_views_around_mesh(
     zfar: float = 10.0,
     normalize_depth: bool = False,
     flags: int = pyrender.constants.RenderFlags.NONE,
-    return_depth: bool = False, 
+    return_depth: bool = False,
     return_type: Literal['pil', 'ndarray'] = 'pil'
 ) -> Union[
-        List[Image.Image], 
-        List[np.ndarray], 
-        Tuple[List[Image.Image], List[Image.Image]], 
+        List[Image.Image],
+        List[np.ndarray],
+        Tuple[List[Image.Image], List[Image.Image]],
         Tuple[List[np.ndarray], List[np.ndarray]]
     ]:
-    
+
     if not isinstance(mesh, (trimesh.Trimesh, trimesh.Scene)):
         raise ValueError("mesh must be a trimesh.Trimesh or trimesh.Scene object")
     if isinstance(mesh, trimesh.Scene):
@@ -192,8 +198,8 @@ def render_normal_views_around_mesh(
     )
     mesh = trimesh.Scene(mesh)
     return render_views_around_mesh(
-        mesh, num_views, radius, axis, 
-        image_size, fov, light_intensity, znear, zfar, 
+        mesh, num_views, radius, axis,
+        image_size, fov, light_intensity, znear, zfar,
         normalize_depth, flags,
         return_depth, return_type
     )
@@ -203,6 +209,10 @@ def create_camera_pose_on_sphere(
     elevation: float = 0.0, # in degrees
     radius: float = 3.5,
 ) -> np.ndarray:
+    # Create a camera pose for a given azimuth and elevation
+    # with the given radius.
+    # The camera always looks at the origin.
+    # The up vector is always [0, 1, 0].
     canonical_pose = np.array([
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
@@ -218,7 +228,7 @@ def create_camera_pose_on_sphere(
     ])
     R = np.eye(4)
     R[:3, :3] = rotation_matrix_from_vectors(
-        np.array([0.0, 0.0, 1.0]), 
+        np.array([0.0, 0.0, 1.0]),
         position
     )
     pose = R @ canonical_pose
@@ -232,20 +242,20 @@ def render_single_view(
     image_size: tuple = (512, 512),
     fov: float = 40.0,
     light_intensity: Optional[float] = 5.0,
-    num_env_lights: int = 0, 
+    num_env_lights: int = 0,
     znear: float = 0.1,
     zfar: float = 10.0,
     normalize_depth: bool = False,
     flags: int = pyrender.constants.RenderFlags.NONE,
-    return_depth: bool = False, 
+    return_depth: bool = False,
     return_type: Literal['pil', 'ndarray'] = 'pil'
 ) -> Union[
-        Image.Image, 
-        np.ndarray, 
-        Tuple[Image.Image, Image.Image], 
+        Image.Image,
+        np.ndarray,
+        Tuple[Image.Image, Image.Image],
         Tuple[np.ndarray, np.ndarray]
     ]:
-    
+
     if not isinstance(mesh, (trimesh.Trimesh, trimesh.Scene)):
         raise ValueError("mesh must be a trimesh.Trimesh or trimesh.Scene object")
     if isinstance(mesh, trimesh.Trimesh):
@@ -253,7 +263,7 @@ def render_single_view(
 
     scene = pyrender.Scene.from_trimesh_scene(mesh)
     light = pyrender.DirectionalLight(
-        color=np.ones(3), 
+        color=np.ones(3),
         intensity=light_intensity
     ) if light_intensity is not None else None
     camera = pyrender.PerspectiveCamera(
@@ -281,6 +291,7 @@ def render_single_view(
                 color=np.ones(3),
                 intensity=light_intensity
             ), pose=pose)
+        # set light to None
         light = None
 
     image, depth = render(
@@ -328,18 +339,18 @@ def render_normal_single_view(
     )
     mesh = trimesh.Scene(mesh)
     return render_single_view(
-        mesh, azimuth, elevation, radius, 
+        mesh, azimuth, elevation, radius,
         image_size, fov, light_intensity, znear, zfar,
-        normalize_depth, flags, 
+        normalize_depth, flags,
         return_depth, return_type
     )
 
 def export_renderings(
     images: List[Image.Image],
     export_path: str,
-    fps: int = 36, 
+    fps: int = 36,
     loop: int = 0
-): 
+):
     export_type = export_path.split('.')[-1]
     if export_type == 'mp4':
         export_to_video(
@@ -358,12 +369,12 @@ def export_renderings(
         )
     else:
         raise ValueError(f'Unknown export type: {export_type}')
-    
+
 def make_grid_for_images_or_videos(
     images_or_videos: Union[List[Image.Image], List[List[Image.Image]]],
-    nrow: int = 4, 
-    padding: int = 0, 
-    pad_value: int = 0, 
+    nrow: int = 4,
+    padding: int = 0,
+    pad_value: int = 0,
     image_size: tuple = (512, 512),
     return_type: Literal['pil', 'ndarray'] = 'pil'
 ) -> Union[Image.Image, List[Image.Image], np.ndarray]:
@@ -398,12 +409,13 @@ def make_grid_for_images_or_videos(
         return image_grids
     else:
         raise ValueError(f'Unknown input type: {type(images_or_videos[0])}')
-    
+
 def create_cube_face_camera_poses(radius: float = 4.0, elevation_offset = 0.0) -> List[np.ndarray]:
     """
-    Generate 6 camera poses from cube faces (approximate directions) towards origin,
-    using create_camera_pose_on_sphere logic as base.
+    生成6个从立方体六个面（大致方向）朝向原点的相机位姿，
+    使用 create_camera_pose_on_sphere 的逻辑作为基础。
     """
+    # 定义 6 个视角对应的 (azimuth, elevation) 角度 (单位：度)
     angles = {
         "front": (0, 0+elevation_offset),    # +Z axis
         "back":  (180, 0+elevation_offset),  # -Z axis
@@ -431,19 +443,19 @@ def render_cube_views_mesh(
     fov: float = 40.0,
     light_intensity: Optional[float] = 5.0,
     znear: float = 0.1,
-    zfar: float = 10.0, 
+    zfar: float = 10.0,
     num_env_lights: float = 0,
     normalize_depth: bool = False,
     flags: int = pyrender.constants.RenderFlags.NONE,
-    return_depth: bool = False, 
+    return_depth: bool = False,
     return_type: Literal['pil', 'ndarray'] = 'pil'
 ) -> Union[
-        List[Image.Image], 
-        List[np.ndarray], 
-        Tuple[List[Image.Image], List[Image.Image]], 
+        List[Image.Image],
+        List[np.ndarray],
+        Tuple[List[Image.Image], List[Image.Image]],
         Tuple[List[np.ndarray], List[np.ndarray]]
     ]:
-    
+
     if not isinstance(mesh, (trimesh.Trimesh, trimesh.Scene)):
         raise ValueError("mesh must be a trimesh.Trimesh or trimesh.Scene object")
     if isinstance(mesh, trimesh.Trimesh):
@@ -451,7 +463,7 @@ def render_cube_views_mesh(
 
     scene = pyrender.Scene.from_trimesh_scene(mesh)
     light = pyrender.DirectionalLight(
-        color=np.ones(3), 
+        color=np.ones(3),
         intensity=light_intensity
     ) if light_intensity is not None else None
     camera = pyrender.PerspectiveCamera(
@@ -468,7 +480,7 @@ def render_cube_views_mesh(
     images, depths = [], []
     for pose in camera_poses:
         image, depth = render(
-            scene, renderer, camera, pose, light, 
+            scene, renderer, camera, pose, light,
             normalize_depth=normalize_depth,
             flags=flags,
             return_type=return_type
