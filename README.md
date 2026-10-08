@@ -30,7 +30,7 @@ Generation results on objects with complex topologies using manually annotated p
 ## Release Status
 
 - [x] Training and inference code
-- [x] [Pretrained transformer checkpoint](https://huggingface.co/gucci233/FlexPart)
+- [x] Release checkpoint
 - [x] Local Gradio demo for points and boxes
 - [ ] Public paper link
 
