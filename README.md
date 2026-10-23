@@ -1,4 +1,4 @@
-# FlexPart: A Unified Framework for Image-to-3D Part Generation via Variable Granularity
+# [NeurIPS 2026] FlexPart: A Unified Framework for Image-to-3D Part Generation via Variable Granularity
 
 <div align="center">
 
