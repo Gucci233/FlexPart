@@ -5,11 +5,11 @@
 **Qiwen Gu · Xin Zhou · Xiwu Chen · Zhongyang Zhu · Zhuo Zhang · Junqiao Zhao**
 
 [![Model](https://img.shields.io/badge/🤗%20Model-FlexPart-yellow.svg)](https://huggingface.co/gucci233/FlexPart)
-![Paper](https://img.shields.io/badge/Paper-Coming%20Soon-b31b1b.svg)
+[![arXiv](https://img.shields.io/badge/arXiv-2610.31671-b31b1b.svg?logo=arXiv)](https://arxiv.org/abs/2610.31671)
 
 </div>
 
-Official implementation of **A Unified Framework for Image-to-3D Part Generation via Variable Granularity**.
+Official implementation of [**A Unified Framework for Image-to-3D Part Generation via Variable Granularity**](https://arxiv.org/abs/2610.31671).
 
 FlexPart generates separate, assemblable 3D parts from a single image. One model supports **point, bounding-box, and segmentation-mask prompts**, so users can choose the amount of geometric control they need. Built upon [PartCrafter](https://github.com/wgsxm/PartCrafter), it combines gated adaptive modulation with asymmetric geometric guidance during training.
 
@@ -32,7 +32,7 @@ Generation results on objects with complex topologies using manually annotated p
 - [x] Training and inference code
 - [x] Release checkpoint
 - [x] Local Gradio demo for points and boxes
-- [ ] Public paper link
+- [x] Public paper link
 
 ## Installation
 
@@ -239,14 +239,16 @@ We thank the authors of [PartCrafter](https://github.com/wgsxm/PartCrafter), [Tr
 ## Citation
 
 ```bibtex
-@misc{gu2026flexpart,
+@misc{gu2026unifiedframeworkimageto3dgeneration,
   title={A Unified Framework for Image-to-3D Part Generation via Variable Granularity},
   author={Qiwen Gu and Xin Zhou and Xiwu Chen and Zhongyang Zhu and Zhuo Zhang and Junqiao Zhao},
-  year={2026}
+  year={2026},
+  eprint={2610.31671},
+  archivePrefix={arXiv},
+  primaryClass={cs.CV},
+  url={https://arxiv.org/abs/2610.31671},
 }
 ```
-
-The public paper URL and publication metadata will be added when available.
 
 ## License
 
